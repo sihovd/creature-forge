@@ -10,7 +10,9 @@ Spesifikasjonen skiller mellom avklarte krav, tidligere produktretning, tekniske
 
 ## Status
 
-Repoet er opprettet med prosjektgrunnlaget. Ingen kjørbar geometrimotor eller applikasjon er importert ennå. Det finnes derfor foreløpig ingen installasjons-, bygge- eller testkommandoer for applikasjonen.
+På `main` ligger prosjektgrunnlaget og referanseplanen. Første kodeforslag finnes i [PR #1: Milepæl 1](https://github.com/sihovd/creature-forge/pull/1), på grenen `milepael-1-oppsett`. PR-en beskriver Rust/Wasm-kjerne, worker, Three.js-grensesnitt og tomt arbeidsrom ved oppstart. Den er ikke slått sammen med `main`.
+
+Testresultater og ytelsestall i PR-beskrivelsen er rapportert av forfatteren og er ikke uavhengig verifisert ved denne dokumentimporten. Bygge- og testinstruksjoner for applikasjonen må leses sammen med kodeforslaget.
 
 Claude-artefakten er lest og eksportert. Den inneholder en utviklingsplan, ikke applikasjonskode. Originaleksporten er bevart uendret i [Claude-planen](docs/references/Claude_plan_for_forste_versjon_original.md).
 
