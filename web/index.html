@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="nb">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Creature Forge</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand">Creature Forge</span>
+      <div class="tools" role="toolbar" aria-label="Verktøy">
+        <button id="add-sphere" type="button">Legg til kule</button>
+      </div>
+    </header>
+    <main id="viewport" class="viewport" data-shape-count="0">
+      <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Legg til kule» for å begynne.</p>
+    </main>
+    <footer id="status" class="status" aria-live="polite">Starter geometrikjernen …</footer>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
