@@ -2,6 +2,17 @@
 
 Les docs/Creature_Forge_spesifikasjon.md før endringer. Dette er prosjektets produktgrunnlag. Nye direkte avklaringer fra Sivert har forrang; oppdater spesifikasjonen når en slik avklaring endrer kravene.
 
+## Rollefordeling
+
+Avklart med Sivert 27. oktober 2026:
+
+- Claude er hovedutvikler og har hovedansvar for å bygge Creature Forge, implementere funksjoner og videreutvikle arkitekturen.
+- ChatGPT/Codex har hovedansvar for uavhengig testing og kodegjennomgang: bygge og kjøre løsningen, kontrollere geometri og arbeidsflyt mot spesifikasjonen, gjenskape feil og dokumentere funn.
+- ChatGPT/Codex kan gjøre målrettede feilrettinger og forbedringer ved behov. Større funksjonsutvikling og arkitekturomlegginger skal koordineres med Claude og Sivert.
+- Sivert avgjør produktkrav og ønsket oppførsel.
+
+Ved gjennomgang skal ChatGPT/Codex kontrollere den konkrete revisjonen, skille egne testresultater fra utviklerens påstander og oppgi hva som ikke er verifisert. Egne kodeendringer skal være avgrensede og sporbare, helst i en separat gren eller PR. Ikke overskriv pågående arbeid fra Claude eller slå sammen PR-er som del av en ren gjennomgang.
+
 ## Implementasjon
 
 - Bygg reell funksjonalitet i den tiltenkte produksjonsarkitekturen. Ikke erstatt geometrikjernen med en visuell mockup.
