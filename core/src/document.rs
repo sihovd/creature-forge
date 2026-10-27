@@ -3,7 +3,9 @@
 //!
 //! Dokumentet lagrer operasjonene, ikke bare meshen. En kroppsdels mesh
 //! beregnes ved å spille av operasjonene som gjelder den. Hvert ferdig drag
-//! er én operasjon og dermed ett angresteg.
+//! er én operasjon og dermed ett angresteg. Redigering av en senterlinje
+//! lagres som en egen operasjon som erstatter parameterne til et tidligere
+//! uttrekk, slik at angre gjenoppretter de gamle parameterne.
 
 use crate::mesh::{length, normalize, sub, TriMesh, Vec3};
 use crate::pull::{apply_pull, Pull};
@@ -23,12 +25,20 @@ pub enum Operation {
         shape: ShapeId,
         pull: Pull,
     },
+    /// Nye parametere for uttrekket på plass `target` i historikken.
+    EditPull {
+        shape: ShapeId,
+        target: usize,
+        pull: Pull,
+    },
 }
 
 impl Operation {
     pub fn shape(&self) -> ShapeId {
         match self {
-            Operation::AddSphere { shape, .. } | Operation::Pull { shape, .. } => *shape,
+            Operation::AddSphere { shape, .. }
+            | Operation::Pull { shape, .. }
+            | Operation::EditPull { shape, .. } => *shape,
         }
     }
 }
@@ -108,6 +118,46 @@ impl Document {
         self.apply(Operation::Pull { shape, pull })
     }
 
+    /// Senterlinjene til en form: historikkplass og gjeldende parametere per uttrekk.
+    pub fn centerlines(&self, shape: ShapeId) -> Vec<(usize, Pull)> {
+        self.effective(shape, None)
+            .into_iter()
+            .filter_map(|(i, op)| match op {
+                Operation::Pull { pull, .. } => Some((i, pull)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Forhåndsviser formen med nye parametere for et tidligere uttrekk.
+    pub fn preview_edit(
+        &self,
+        shape: ShapeId,
+        target: usize,
+        pull: &Pull,
+    ) -> Result<TriMesh, String> {
+        self.check_edit(shape, target)?;
+        self.evaluate_shape(shape, Some((target, *pull)))?
+            .ok_or_else(|| "Ukjent form".into())
+    }
+
+    /// Endrer et tidligere uttrekk (redigering av senterlinjen). Ett angresteg.
+    pub fn commit_edit(&mut self, shape: ShapeId, target: usize, pull: Pull) -> Result<(), String> {
+        self.check_edit(shape, target)?;
+        self.apply(Operation::EditPull {
+            shape,
+            target,
+            pull,
+        })
+    }
+
+    fn check_edit(&self, shape: ShapeId, target: usize) -> Result<(), String> {
+        match self.history.get(target) {
+            Some(Operation::Pull { shape: s, .. }) if *s == shape => Ok(()),
+            _ => Err("Senterlinjen finnes ikke".into()),
+        }
+    }
+
     /// Angrer siste operasjon. Returnerer formen som ble endret.
     pub fn undo(&mut self) -> Option<ShapeId> {
         let op = self.history.pop()?;
@@ -121,16 +171,21 @@ impl Document {
     pub fn redo(&mut self) -> Option<ShapeId> {
         let op = self.redo.pop()?;
         let shape = op.shape();
-        let mesh = self.evaluate(self.meshes.get(&shape), &op).ok()?;
-        self.meshes.insert(shape, mesh);
         self.history.push(op);
+        self.rebuild(shape);
         self.revision += 1;
         Some(shape)
     }
 
     fn apply(&mut self, op: Operation) -> Result<(), String> {
         let shape = op.shape();
-        let mesh = self.evaluate(self.meshes.get(&shape), &op)?;
+        let mesh = match &op {
+            // En redigering endrer en tidligere operasjon, så formen beregnes fra starten.
+            Operation::EditPull { target, pull, .. } => self
+                .evaluate_shape(shape, Some((*target, *pull)))?
+                .ok_or("Ukjent form")?,
+            _ => self.evaluate(self.meshes.get(&shape), &op)?,
+        };
         self.meshes.insert(shape, mesh);
         self.history.push(op);
         self.redo.clear();
@@ -152,17 +207,57 @@ impl Document {
                 pull,
                 self.target_edge,
             ),
+            Operation::EditPull { .. } => Err("En redigering beregnes via historikken".into()),
         }
+    }
+
+    /// Operasjonene som gjelder formen, med redigeringer lagt inn i det
+    /// uttrekket de endrer. `extra` er en redigering som ikke er lagret ennå.
+    fn effective(&self, shape: ShapeId, extra: Option<(usize, Pull)>) -> Vec<(usize, Operation)> {
+        let mut ops: Vec<(usize, Operation)> = Vec::new();
+        let edits = self
+            .history
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| op.shape() == shape);
+        for (i, op) in edits {
+            match op {
+                Operation::EditPull { target, pull, .. } => {
+                    if let Some((_, Operation::Pull { pull: p, .. })) =
+                        ops.iter_mut().find(|(j, _)| j == target)
+                    {
+                        *p = *pull;
+                    }
+                }
+                _ => ops.push((i, op.clone())),
+            }
+        }
+        if let Some((target, pull)) = extra {
+            if let Some((_, Operation::Pull { pull: p, .. })) =
+                ops.iter_mut().find(|(j, _)| *j == target)
+            {
+                *p = pull;
+            }
+        }
+        ops
+    }
+
+    fn evaluate_shape(
+        &self,
+        shape: ShapeId,
+        extra: Option<(usize, Pull)>,
+    ) -> Result<Option<TriMesh>, String> {
+        let mut mesh: Option<TriMesh> = None;
+        for (_, op) in self.effective(shape, extra) {
+            mesh = Some(self.evaluate(mesh.as_ref(), &op)?);
+        }
+        Ok(mesh)
     }
 
     /// Beregner en forms mesh på nytt fra operasjonene i historikken.
     fn rebuild(&mut self, shape: ShapeId) {
-        let mut mesh: Option<TriMesh> = None;
-        for op in self.history.iter().filter(|op| op.shape() == shape) {
-            // Operasjonene var gyldige da de ble lagt inn, og beregningen er deterministisk.
-            mesh = self.evaluate(mesh.as_ref(), op).ok();
-        }
-        match mesh {
+        // Operasjonene var gyldige da de ble lagt inn, og beregningen er deterministisk.
+        match self.evaluate_shape(shape, None).ok().flatten() {
             Some(m) => self.meshes.insert(shape, m),
             None => self.meshes.remove(&shape),
         };
@@ -208,12 +303,7 @@ mod tests {
     fn pull_on(doc: &Document, shape: ShapeId, distance: f64) -> Pull {
         let anchor = doc.mesh(shape).unwrap().positions[0];
         let direction = normalize(sub(anchor, [0.0, 25.0, 0.0]));
-        Pull {
-            anchor,
-            direction,
-            distance,
-            radius: 10.0,
-        }
+        Pull::straight(anchor, direction, distance, 10.0)
     }
 
     #[test]
@@ -270,5 +360,32 @@ mod tests {
         }
         // Færre punkter med større avstand (CF02: avstanden styrer bare grepene).
         assert!(control_points(&mesh, 12.0).len() < pts.len());
+    }
+
+    #[test]
+    fn redigering_av_senterlinjen_kan_angres() {
+        let mut doc = Document::new(2.0);
+        let s = doc.add_sphere([0.0, 25.0, 0.0], 25.0).unwrap();
+        let pull = pull_on(&doc, s, 15.0);
+        doc.commit_pull(s, pull).unwrap();
+        let straight = doc.mesh(s).unwrap().clone();
+        let (target, _) = doc.centerlines(s)[0];
+
+        let bent = Pull {
+            tip: [pull.tip[0] + 10.0, pull.tip[1], pull.tip[2]],
+            ..pull
+        };
+        let preview = doc.preview_edit(s, target, &bent).unwrap();
+        doc.commit_edit(s, target, bent).unwrap();
+        assert_eq!(doc.mesh(s).unwrap().positions, preview.positions);
+        assert_eq!(doc.centerlines(s), vec![(target, bent)]);
+        assert_ne!(doc.mesh(s).unwrap().positions, straight.positions);
+
+        doc.undo();
+        assert_eq!(doc.centerlines(s), vec![(target, pull)]);
+        assert_eq!(doc.mesh(s).unwrap().positions, straight.positions);
+        doc.redo();
+        assert_eq!(doc.centerlines(s), vec![(target, bent)]);
+        assert!(doc.commit_edit(s, 0, bent).is_err());
     }
 }

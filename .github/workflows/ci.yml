@@ -48,6 +48,7 @@ jobs:
         run: |
           npm ci
           npm run core
+          npm test
           npm run build
 
       - name: Nettlesertester
