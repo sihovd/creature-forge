@@ -12,10 +12,11 @@ Spesifikasjonen skiller mellom avklarte krav, tidligere produktretning, tekniske
 
 Repoet er opprettet med prosjektgrunnlaget. Ingen kjørbar geometrimotor eller applikasjon er importert ennå. Det finnes derfor foreløpig ingen installasjons-, bygge- eller testkommandoer for applikasjonen.
 
-Kildeartefakten som skal undersøkes og eventuelt importeres:
-https://claude.ai/artifact/XWFCDBhgc7gS5yg2xB1vqn#1aad0e36-3736
+Claude-artefakten er lest og eksportert. Den inneholder en utviklingsplan, ikke applikasjonskode. Originaleksporten er bevart uendret i [Claude-planen](docs/references/Claude_plan_for_forste_versjon_original.md).
 
-Artefaktens innhold er ikke bekreftet som tilgjengelig ved opprettelsen av dette prosjektgrunnlaget.
+Kilde: https://claude.ai/artifact/XWFCDBhgc7gS5yg2xB1vqn#1aad0e36-3736
+
+Planen er referansemateriale. Foreslått teknologistakk, redusert omfang for første milepæl og automatisk publisering er ikke behandlet som godkjente beslutninger eller implementert. Planen oppgir også tomt arbeidsrom ved oppstart, mens spesifikasjon 1.1 viser en kule i arbeidsflyten; dette avviket er registrert og må avklares før implementasjon av oppstarten. Spesifikasjonen er ikke endret på grunnlag av denne importen.
 
 ## Sentrale krav
 
