@@ -77,4 +77,47 @@ test.describe('formgrep med mus', () => {
     await expect(viewport(page)).toHaveAttribute('data-revision', '1');
     await expect(page.getByRole('button', { name: 'Angre' })).toBeEnabled();
   });
+
+  test('CF05 og CF07: bøy med Alt + Shift, og dra senterlinjen etterpå', async ({ page }) => {
+    await addSphere(page);
+    const p = await grip(page);
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await page.mouse.move(p.x, p.y - 60, { steps: 5 });
+    await page.keyboard.down('Alt');
+    await page.keyboard.down('Shift');
+    await page.mouse.move(p.x + 60, p.y - 40, { steps: 5 });
+    await expect(page.locator('#status')).toContainText('Lås lengde og bøy');
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await page.keyboard.up('Alt');
+    await expect(page.locator('#status')).toContainText('bøyde');
+    await expect(viewport(page)).toHaveAttribute('data-centerlines', '1');
+
+    const tip = await page.evaluate(() => window.creatureForgeTest!.firstCenterlineTip());
+    expect(tip).not.toBeNull();
+    await page.mouse.move(tip!.x, tip!.y);
+    await page.mouse.down();
+    await page.mouse.move(tip!.x - 40, tip!.y + 10, { steps: 5 });
+    await page.mouse.up();
+    await expect(page.locator('#status')).toContainText('Endret senterlinjen');
+    await expect(viewport(page)).toHaveAttribute('data-revision', '3');
+    await expect(viewport(page)).toHaveAttribute('data-centerlines', '1');
+
+    await page.keyboard.press('Control+Z');
+    await expect(page.locator('#status')).toContainText('Angret');
+    await expect(viewport(page)).toHaveAttribute('data-centerlines', '1');
+  });
+
+  test('modusknappen «Flytt i plan» virker uten tastatur', async ({ page }) => {
+    await addSphere(page);
+    await page.getByRole('button', { name: 'Flytt i plan' }).click();
+    const p = await grip(page);
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await page.mouse.move(p.x + 40, p.y - 20, { steps: 5 });
+    await expect(page.locator('#status')).toContainText('Flytt i plan');
+    await page.mouse.up();
+    await expect(viewport(page)).toHaveAttribute('data-revision', '2');
+  });
 });

@@ -4,6 +4,7 @@
 //! meshdata tilbake (se spesifikasjonen kap. 17). Alle lengder er i
 //! millimeter.
 
+pub mod curve;
 pub mod document;
 pub mod mesh;
 pub mod pull;
@@ -143,6 +144,45 @@ impl JsDocument {
             .map_err(|e| JsError::new(&e))
     }
 
+    #[wasm_bindgen(js_name = previewEdit)]
+    pub fn preview_edit(
+        &self,
+        shape: u32,
+        target: u32,
+        pull: &[f64],
+    ) -> Result<MeshBuffers, JsError> {
+        let mesh = self
+            .0
+            .preview_edit(shape, target as usize, &read_pull(pull)?)
+            .map_err(|e| JsError::new(&e))?;
+        Ok((&mesh).into())
+    }
+
+    #[wasm_bindgen(js_name = commitEdit)]
+    pub fn commit_edit(&mut self, shape: u32, target: u32, pull: &[f64]) -> Result<(), JsError> {
+        self.0
+            .commit_edit(shape, target as usize, read_pull(pull)?)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Senterlinjene til en form, `CENTERLINE_STRIDE` tall per linje:
+    /// historikkplass, radius, A, n0, B og deretter punkter langs kurven.
+    pub fn centerlines(&self, shape: u32) -> Vec<f64> {
+        let mut out = Vec::new();
+        for (target, pull) in self.0.centerlines(shape) {
+            out.push(target as f64);
+            out.push(pull.radius);
+            out.extend(pull.anchor);
+            out.extend(pull.normal);
+            out.extend(pull.tip);
+            let curve = pull.curve();
+            for i in 0..CENTERLINE_SAMPLES {
+                out.extend(curve.point(i as f64 / (CENTERLINE_SAMPLES - 1) as f64));
+            }
+        }
+        out
+    }
+
     /// Angrer siste operasjon og returnerer formen som ble endret.
     pub fn undo(&mut self) -> Option<u32> {
         self.0.undo()
@@ -153,15 +193,21 @@ impl JsDocument {
     }
 }
 
-/// Grepet sendes som [ax, ay, az, dx, dy, dz, avstand, radius].
+/// Grepet sendes som [ax, ay, az, nx, ny, nz, bx, by, bz, radius]:
+/// startpunkt A, overflatenormal n0, grep B og påvirkningsradius, i mm.
 fn read_pull(v: &[f64]) -> Result<Pull, JsError> {
-    if v.len() != 8 {
-        return Err(JsError::new("Grepet må ha 8 tall"));
+    if v.len() != 10 {
+        return Err(JsError::new("Grepet må ha 10 tall"));
     }
     Ok(Pull {
         anchor: [v[0], v[1], v[2]],
-        direction: [v[3], v[4], v[5]],
-        distance: v[6],
-        radius: v[7],
+        normal: [v[3], v[4], v[5]],
+        tip: [v[6], v[7], v[8]],
+        radius: v[9],
     })
 }
+
+/// Antall punkter per senterlinje som sendes til visningen.
+pub const CENTERLINE_SAMPLES: usize = 33;
+/// Tall per senterlinje: historikkplass, radius, A, n0, B og punktene.
+pub const CENTERLINE_STRIDE: usize = 11 + CENTERLINE_SAMPLES * 3;

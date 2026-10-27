@@ -90,6 +90,27 @@ body {
   color: var(--text);
 }
 
+.modes { display: grid; gap: 4px; margin-bottom: 14px; }
+
+.modes button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.modes button[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+.panel label.check { justify-content: flex-start; }
+
+.panel label.check input { width: auto; min-height: 0; }
+
 .panel .help { margin: 12px 0 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
 
 @media (max-width: 640px) {
@@ -102,6 +123,8 @@ body {
   .panel h2, .panel .help { display: none; }
   .panel label { margin-bottom: 6px; }
   .panel input { min-height: 40px; width: 72px; }
+  .modes { grid-template-columns: repeat(3, 1fr); margin-bottom: 8px; }
+  .modes button { min-height: 40px; font-size: 13px; text-align: center; padding: 0 4px; }
 }
 
 .viewport {

@@ -29,6 +29,7 @@ function shapeUpdate(shape: number, spacingMm: number): ShapeUpdate {
     shape,
     mesh: buffers ? take(buffers) : null,
     controlPoints: buffers ? doc.controlPoints(shape, spacingMm) : new Float32Array(),
+    centerlines: buffers ? doc.centerlines(shape) : new Float64Array(),
   };
 }
 
@@ -51,6 +52,15 @@ function run(req: GeometryRequest): GeometryResult {
     case 'commitPull':
       doc.commitPull(req.shape, Float64Array.from(req.pull));
       return documentResult([req.shape], req.spacingMm);
+    case 'previewEdit':
+      return {
+        kind: 'preview',
+        shape: req.shape,
+        mesh: take(doc.previewEdit(req.shape, req.target, Float64Array.from(req.pull))),
+      };
+    case 'commitEdit':
+      doc.commitEdit(req.shape, req.target, Float64Array.from(req.pull));
+      return documentResult([req.shape], req.spacingMm);
     case 'undo':
     case 'redo': {
       const shape = req.kind === 'undo' ? doc.undo() : doc.redo();
@@ -63,7 +73,8 @@ function run(req: GeometryRequest): GeometryResult {
 
 function transferables(result: GeometryResult): Transferable[] {
   const meshes = result.kind === 'preview' ? [result.mesh] : result.shapes.flatMap((s) => (s.mesh ? [s.mesh] : []));
-  const points = result.kind === 'document' ? result.shapes.map((s) => s.controlPoints.buffer) : [];
+  const points =
+    result.kind === 'document' ? result.shapes.flatMap((s) => [s.controlPoints.buffer, s.centerlines.buffer]) : [];
   return [...meshes.flatMap((m) => [m.positions.buffer, m.normals.buffer, m.indices.buffer]), ...points];
 }
 

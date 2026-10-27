@@ -21,6 +21,11 @@
       </main>
       <aside class="panel" aria-label="Egenskaper">
         <h2>Formgrep</h2>
+        <div class="modes" role="group" aria-label="Grepsmodus">
+          <button type="button" data-mode="pull" aria-pressed="true" title="Dra langs overflatenormalen">Trekk ut</button>
+          <button type="button" data-mode="plane" aria-pressed="false" title="Alt: flytt grepet i planet vinkelrett på normalen">Flytt i plan</button>
+          <button type="button" data-mode="lock" aria-pressed="false" title="Alt + Shift: lås lengden A–B og bøy">Lås lengde og bøy</button>
+        </div>
         <label>
           Punktavstand
           <span class="field"><input id="spacing" type="number" min="2" max="40" step="0.5" value="6" inputmode="decimal" /> mm</span>
@@ -29,7 +34,8 @@
           Påvirkningsradius
           <span class="field"><input id="radius" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /> mm</span>
         </label>
-        <p class="help">Hold over et punkt for å se retningen. Dra for å trekke ut, dra motsatt vei for å presse inn. Esc avbryter.</p>
+        <label class="check"><input id="show-centerlines" type="checkbox" checked /> Vis senterlinjer</label>
+        <p class="help">Hold over et punkt for å se retningen, og dra for å trekke ut eller presse inn. Hold Alt for å flytte i plan, eller Alt + Shift for å låse lengden og bøye. Dra i tuppen av en senterlinje for å endre bøyningen. Esc avbryter.</p>
       </aside>
     </div>
     <footer id="status" class="status" aria-live="polite">Starter geometrikjernen …</footer>

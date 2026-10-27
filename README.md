@@ -18,7 +18,9 @@ Arbeidsmåten er beskrevet i [AGENTS.md](AGENTS.md).
 
 Milepæl 1 ([PR #1](https://github.com/sihovd/creature-forge/pull/1)) legger inn Rust/Wasm-kjerne, worker, Three.js-grensesnitt og tomt arbeidsrom ved oppstart. Den dekker ennå ingen av akseptansetestene CF01–CF25; den er en motorprøve for arkitekturen.
 
-Formgrep er på plass: kontrollpunkter fordelt etter punktavstand, pil og påvirkningsområde ved hover, uttrekk og innpressing ved drag med lokal kantdeling, Escape for å avbryte, og angre og gjør om der hvert drag er ett steg. Nettlesertestene dekker deler av CF01–CF03, CF06 og CF21 med mus på desktop; berøring er ikke automatisk testet ennå. Alt-modusene, varige senterlinjer, lagring og et ferdig grensesnitt gjenstår.
+Formgrep er på plass: kontrollpunkter fordelt etter punktavstand, pil og påvirkningsområde ved hover, uttrekk og innpressing ved drag med lokal kantdeling, Escape for å avbryte, og angre og gjør om der hvert drag er ett steg. Nettlesertestene dekker deler av CF01–CF03, CF06 og CF21 med mus på desktop; berøring er ikke automatisk testet ennå.
+
+Bøying og senterlinje: uttrekket følger en kubisk Hermite-kurve fra A til grepet B med rotasjonsminimerende rammer. Alt flytter grepet i planet vinkelrett på den opprinnelige uttrekksretningen. Det er spesifikasjonens anbefalte startpunkt og er ikke bekreftet av Sivert ennå. Alt + Shift låser den rette avstanden A–B og roterer B rundt A, og de samme modusene finnes som knapper. Etter slipp vises senterlinjen, og tuppen kan dras for å endre bøyningen. Endringen er én angrebar operasjon som erstatter uttrekkets parametere. Lagring og et ferdig grensesnitt gjenstår.
 
 Sivert avklarte 27. oktober 2026 at brukeren skal se et tomt arbeidsrom når appen starter. Spesifikasjonen (kapittel 3, steg 1) er oppdatert tilsvarende.
 
@@ -46,6 +48,7 @@ cd web
 npm install
 npm run core             # bygger Rust-kjernen til web/src/core-pkg
 npm run dev              # utviklingsserver på http://localhost:5173
+npm test                 # enhetstester for grepsberegningene
 npm run build && npm run test:e2e   # nettlesertester (desktop og mobil)
 ```
 
