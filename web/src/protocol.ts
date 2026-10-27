@@ -1,9 +1,19 @@
 // Meldinger mellom grensesnittet og geometriworkeren (spesifikasjonen kap. 17 og 24).
-// Hver forespørsel har en id og dokumentrevisjonen den gjelder for, slik at et
-// gammelt resultat aldri kan overskrive en nyere redigering.
+// Workeren eier dokumentet. Grensesnittet sender kommandoer og får tilbake
+// beregnede meshdata; det har ingen egen kopi av dokumentets sannhet.
 
-export type GeometryRequest =
-  | { id: number; revision: number; kind: 'createSphere'; radiusMm: number; targetEdgeMm: number };
+/** Et grep: [ax, ay, az, dx, dy, dz, avstand mm, påvirkningsradius mm]. */
+export type PullParams = [number, number, number, number, number, number, number, number];
+
+export type Command =
+  | { kind: 'addSphere'; center: [number, number, number]; radiusMm: number }
+  | { kind: 'previewPull'; shape: number; pull: PullParams }
+  | { kind: 'commitPull'; shape: number; pull: PullParams }
+  | { kind: 'undo' }
+  | { kind: 'redo' }
+  | { kind: 'controlPoints'; spacingMm: number };
+
+export type GeometryRequest = Command & { id: number; spacingMm: number };
 
 export interface MeshResult {
   positions: Float32Array;
@@ -11,7 +21,25 @@ export interface MeshResult {
   indices: Uint32Array;
 }
 
+export interface ShapeUpdate {
+  shape: number;
+  /** Ny mesh, eller null når formen er fjernet (for eksempel ved angre). */
+  mesh: MeshResult | null;
+  /** Kontrollpunkter: x, y, z, nx, ny, nz per punkt. */
+  controlPoints: Float32Array;
+}
+
+export interface DocumentState {
+  revision: number;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export type GeometryResult =
+  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[] }
+  | { kind: 'preview'; shape: number; mesh: MeshResult };
+
 export type GeometryResponse =
   | { kind: 'ready'; geometryVersion: number }
-  | { id: number; revision: number; kind: 'mesh'; mesh: MeshResult; computeMs: number }
-  | { id: number; revision: number; kind: 'error'; message: string };
+  | { id: number; ok: true; result: GeometryResult; computeMs: number }
+  | { id: number; ok: false; message: string };

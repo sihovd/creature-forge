@@ -10,12 +10,28 @@
     <header class="topbar">
       <span class="brand">Creature Forge</span>
       <div class="tools" role="toolbar" aria-label="Verktøy">
+        <button id="undo" type="button" class="secondary" title="Angre (Ctrl+Z)" disabled>Angre</button>
+        <button id="redo" type="button" class="secondary" title="Gjør om (Ctrl+Shift+Z)" disabled>Gjør om</button>
         <button id="add-sphere" type="button">Legg til kule</button>
       </div>
     </header>
-    <main id="viewport" class="viewport" data-shape-count="0">
-      <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Legg til kule» for å begynne.</p>
-    </main>
+    <div class="workspace">
+      <main id="viewport" class="viewport" data-shape-count="0" data-control-points="0" data-revision="0">
+        <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Legg til kule» for å begynne.</p>
+      </main>
+      <aside class="panel" aria-label="Egenskaper">
+        <h2>Formgrep</h2>
+        <label>
+          Punktavstand
+          <span class="field"><input id="spacing" type="number" min="2" max="40" step="0.5" value="6" inputmode="decimal" /> mm</span>
+        </label>
+        <label>
+          Påvirkningsradius
+          <span class="field"><input id="radius" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /> mm</span>
+        </label>
+        <p class="help">Hold over et punkt for å se retningen. Dra for å trekke ut, dra motsatt vei for å presse inn. Esc avbryter.</p>
+      </aside>
+    </div>
     <footer id="status" class="status" aria-live="polite">Starter geometrikjernen …</footer>
     <script type="module" src="./src/main.ts"></script>
   </body>
