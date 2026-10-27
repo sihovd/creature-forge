@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  # Gjør det mulig å starte CI manuelt fra Actions-fanen.
+  workflow_dispatch:
   push:
     branches: [main]
 
