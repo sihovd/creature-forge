@@ -46,9 +46,11 @@ Et øye kan være i gruppen «Hode», følge både hodet og en kinnform som unde
 
 **K.** Brukeren starter med en grunnform, former denne, legger til lag, lager koblingspunkter og bygger videre med ferdige kroppsdeler eller nye kuler. Rekkefølgen er en arbeidsflyt, ikke en lås: ferdige former skal kunne redigeres igjen.
 
+**K.** Brukeren skal se et tomt arbeidsrom når appen starter; ingen form lastes automatisk (avklart med Sivert 27. oktober 2026).
+
 **F.** En sammenhengende økt skal fungere slik:
 
-1. Opprett prosjekt og velg dimensjoner i millimeter. En kule vises i arbeidsflaten.
+1. Appen og et nytt prosjekt starter med et tomt arbeidsrom. Velg dimensjoner i millimeter og legg til en kule med et tydelig valg, for eksempel «Legg til kule».
 2. Dra i et kontrollpunkt eller marker et meshområde og trekk det ut.
 3. Bøy uttrekkingen med Alt eller Alt + Shift. Slipp musen og rediger videre med den varige senterlinjen.
 4. Legg til et lag. Tegn et lukket omriss på den nåværende overflaten.

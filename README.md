@@ -16,15 +16,36 @@ Arbeidsmåten er beskrevet i [AGENTS.md](AGENTS.md).
 
 ## Status
 
-På `main` ligger prosjektgrunnlaget og referanseplanen. Første kodeforslag finnes i [PR #1: Milepæl 1](https://github.com/sihovd/creature-forge/pull/1), på grenen `milepael-1-oppsett`. PR-en beskriver Rust/Wasm-kjerne, worker, Three.js-grensesnitt og tomt arbeidsrom ved oppstart. Den er ikke slått sammen med `main`.
+Milepæl 1 ([PR #1](https://github.com/sihovd/creature-forge/pull/1)) legger inn Rust/Wasm-kjerne, worker, Three.js-grensesnitt og tomt arbeidsrom ved oppstart. Den dekker ennå ingen av akseptansetestene CF01–CF25; den er en motorprøve for arkitekturen.
 
-Testresultater og ytelsestall i PR-beskrivelsen er rapportert av forfatteren og er ikke uavhengig verifisert ved denne dokumentimporten. Bygge- og testinstruksjoner for applikasjonen må leses sammen med kodeforslaget.
+Sivert avklarte 27. oktober 2026 at brukeren skal se et tomt arbeidsrom når appen starter. Spesifikasjonen (kapittel 3, steg 1) er oppdatert tilsvarende.
 
 Claude-artefakten er lest og eksportert. Den inneholder en utviklingsplan, ikke applikasjonskode. Originaleksporten er bevart uendret i [Claude-planen](docs/references/Claude_plan_for_forste_versjon_original.md).
 
 Kilde: https://claude.ai/artifact/XWFCDBhgc7gS5yg2xB1vqn#1aad0e36-3736
 
-Planen er referansemateriale. Foreslått teknologistakk, redusert omfang for første milepæl og automatisk publisering er ikke behandlet som godkjente beslutninger eller implementert. Planen oppgir også tomt arbeidsrom ved oppstart, mens spesifikasjon 1.1 viser en kule i arbeidsflyten; dette avviket er registrert og må avklares før implementasjon av oppstarten. Spesifikasjonen er ikke endret på grunnlag av denne importen.
+Planen er referansemateriale. Foreslått teknologistakk og redusert omfang for første milepæl er ikke behandlet som godkjente beslutninger. Publisering til GitHub Pages fra `main` er satt opp etter at Sivert ba om at repoet skulle gjøres offentlig og publiseres.
+
+## Oppbygging
+
+| Mappe | Innhold |
+| --- | --- |
+| `core/` | Geometrikjernen i Rust, kompilert til WebAssembly. Alle lengder er i millimeter. |
+| `web/` | Nettappen: TypeScript, Vite og Three.js. Kjernen kjører i en Web Worker. |
+| `docs/` | Spesifikasjon og referansemateriale. |
+
+## Kom i gang
+
+Krever Rust (med `wasm32-unknown-unknown`), [wasm-pack](https://rustwasm.github.io/wasm-pack/) og Node 22.
+
+```sh
+cargo test               # tester for geometrikjernen
+cd web
+npm install
+npm run core             # bygger Rust-kjernen til web/src/core-pkg
+npm run dev              # utviklingsserver på http://localhost:5173
+npm run build && npm run test:e2e   # nettlesertester (desktop og mobil)
+```
 
 ## Sentrale krav
 
