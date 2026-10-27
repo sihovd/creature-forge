@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# Avbryt eldre kjøringer på samme gren når en ny commit kommer.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
