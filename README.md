@@ -8,6 +8,12 @@ Les [produktdefinisjonen og den tekniske funksjonsspesifikasjonen](docs/Creature
 
 Spesifikasjonen skiller mellom avklarte krav, tidligere produktretning, tekniske forslag og egenskaper som må verifiseres. Den inneholder 25 akseptansetester. Forslag til biblioteker og ytelsesmål er ikke ferdig validerte valg.
 
+## Rollefordeling
+
+Claude er hovedutvikler og bygger appen. ChatGPT/Codex tester og gjennomgår arbeidet uavhengig, kontrollerer det mot spesifikasjonen og gjør målrettede feilrettinger eller forbedringer ved behov. Større utviklingsarbeid koordineres med Claude og Sivert. Sivert avgjør produktkravene.
+
+Arbeidsmåten er beskrevet i [AGENTS.md](AGENTS.md).
+
 ## Status
 
 På `main` ligger prosjektgrunnlaget og referanseplanen. Første kodeforslag finnes i [PR #1: Milepæl 1](https://github.com/sihovd/creature-forge/pull/1), på grenen `milepael-1-oppsett`. PR-en beskriver Rust/Wasm-kjerne, worker, Three.js-grensesnitt og tomt arbeidsrom ved oppstart. Den er ikke slått sammen med `main`.
