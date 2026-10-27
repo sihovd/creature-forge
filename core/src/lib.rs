@@ -40,7 +40,11 @@ impl From<mesh::TriMesh> for MeshBuffers {
     fn from(m: mesh::TriMesh) -> Self {
         let normals = m.vertex_normals();
         MeshBuffers {
-            positions: m.positions.iter().flat_map(|p| p.map(|v| v as f32)).collect(),
+            positions: m
+                .positions
+                .iter()
+                .flat_map(|p| p.map(|v| v as f32))
+                .collect(),
             normals: normals.iter().flat_map(|n| n.map(|v| v as f32)).collect(),
             indices: m.triangles.iter().flatten().copied().collect(),
         }
@@ -50,8 +54,8 @@ impl From<mesh::TriMesh> for MeshBuffers {
 /// Lager en kule med gitt radius (mm) og ønsket kantlengde (mm).
 #[wasm_bindgen(js_name = createSphere)]
 pub fn create_sphere(radius_mm: f64, target_edge_mm: f64) -> Result<MeshBuffers, JsError> {
-    let mesh = sphere::icosphere_for_edge(radius_mm, target_edge_mm)
-        .map_err(|e| JsError::new(&e))?;
+    let mesh =
+        sphere::icosphere_for_edge(radius_mm, target_edge_mm).map_err(|e| JsError::new(&e))?;
     Ok(mesh.into())
 }
 

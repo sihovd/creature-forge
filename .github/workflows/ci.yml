@@ -19,6 +19,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Formatering og lint
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Rust-tester for geometrikjernen
         run: cargo test --workspace
 
