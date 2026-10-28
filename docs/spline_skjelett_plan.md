@@ -35,12 +35,12 @@ Issue #4 er nyere enn spesifikasjonen kapittel 5 og har forrang:
 - `core/src/skeleton.rs`: spliner av kubiske Bézier-segmenter med ankerpunkter, inn- og uthåndtak, myke punkter og hjørnepunkter.
 - Hierarki: et barn er festet til en andel av forelderens **buelengde**. Barnets punkter lagres i festets lokale ramme. Dermed følger barn og undergrener når forelderen flyttes, bøyes eller redigeres med håndtak, og redigering av barnet endrer aldri forelderen. Festet er knyttet til kurven, ikke til mesh eller overflate.
 - Tykkelse er en egen egenskap per spline og påvirker ikke festene.
-- `core/src/bend.rs`: bøying med låst buelengde. Rett del, sirkelbue og rett rest summerer alltid til S. Vinkel 0–180° i en vilkårlig retning, slik at enderetningen kan ligge hvor som helst på en kule. Radius begrenses til S/θ, og radius null gir en eksplisitt knekk. Snapping er en egen funksjon. En bøy er høyst 180°; for å fortsette legges et nytt punkt inn i senterlinjen og resten bøyes derfra med låst lengde (`bend_from`), avklart med Sivert 28. oktober 2026.
+- `core/src/bend.rs`: bøying med låst buelengde. Rett del, sirkelbue og rett rest summerer alltid til S. Vinkel 0–180° i en vilkårlig retning, slik at enderetningen kan ligge hvor som helst på en kule. Radius begrenses til S/θ, og radius null gir en eksplisitt knekk. Snapping er en egen funksjon. En bøy er høyst 180°; for å fortsette legges et nytt punkt inn i senterlinjen og resten bøyes derfra med låst lengde (`bend_from`). Bøyen starter på midten av kurven, og scroll utvider den like mye til begge sider (`DEFAULT_PIVOT`). Begge deler er avklart med Sivert 28. oktober 2026.
 - Lagring som JSON med format og versjon, med kontroll av fester, sløyfer og tall ved åpning.
 
 **Trinn 2: Skjelettet i appen.** Wasm-grensesnitt, visning av ankerpunkter og håndtak, legge til rot- og barnespliner, angre og gjør om, og lagring/åpning av prosjektfil (overlapper milepæl 2). Hele hierarkiet er ett formlag.
 
-**Trinn 3: Kontrollert uttrekk og bøying.** Dra, Alt, Shift, Ctrl og scroll som i tabellen over, med visning av vinkel, retning og bøyeplan. Før pivot låses, lages en prototype der Sivert kan prøve to–tre varianter (se åpne spørsmål).
+**Trinn 3: Kontrollert uttrekk og bøying.** Dra, Alt, Shift, Ctrl og scroll som i tabellen over, med visning av vinkel, retning og bøyeplan. Bøyen starter på midten av kurven, og scroll utvider den.
 
 **Trinn 4: Overflate fra skjelettet med sirkel og ellipse.** Hver spline får tverrsnitt langs kurven. For at forgreninger skal bli sammenhengende former og ikke overlappende rør, foreslås et avstandsfelt rundt hver spline (feid tverrsnitt) med glatt sammensmelting, og en overflate hentet ut av feltet (for eksempel dual contouring eller surface nets i Rust). Dagens kjerne har ingen slik representasjon, så dette er en ny del som må måles for ytelse og detaljnivå. Endeprofilen bevares helt ut; en spiss er tilfellet der profilen går til null.
 
@@ -54,8 +54,7 @@ Surface tools er et eget verktøysystem og inngår ikke.
 
 ## Åpne spørsmål til Sivert
 
-1. **Pivot for bøyen.** I kjernen er buens plassering en parameter (`pivot`, andel av lengden der midten av buen ligger). Forslag til prototype: (a) buen sentrert der grepet ble tatt, (b) buen starter ved roten, (c) buen ligger like før enden. Dette låses først etter at du har prøvd det.
-2. **Alt + Shift.** Skal den gamle låsen av rett avstand fjernes når Shift-bøying finnes, eller beholdes som egen modus?
+1. **Alt + Shift.** Skal den gamle låsen av rett avstand fjernes når Shift-bøying finnes, eller beholdes som egen modus?
 
 ## Verifikasjon i trinn 1
 
@@ -67,6 +66,7 @@ Kjørt med `cargo test` i denne PR-en:
 - Bézier-håndtak på forelderen: mykt punkt retter inn motsatt håndtak, hjørnepunkt holder dem uavhengige, og hierarkiet består.
 - Buelengde ved 0–180°, radius 0–1000 mm, flere pivoter og snappet vinkel: største relative avvik målt til 1,9·10⁻⁷, krav i testen er 10⁻⁶ (`LENGTH_TOLERANCE`).
 - 90° gir enderetning vinkelrett, 180° vender enden tilbake.
+- Bøyen sentreres på midten av kurven og vokser like mye til begge sider når radien økes.
 - Nytt punkt i bøyen og to bøyer på 180° etter hverandre gir 360° med uendret lengde og uendret del før punktet.
 - Radius null gir en knekk med gyldig senterlinje og ortonormale rammer gjennom knekken, også ved 180°.
 - Lagring og åpning gir likt skjelett. Ukjent format, manglende forelder og sløyfer avvises.

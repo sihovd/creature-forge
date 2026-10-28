@@ -15,8 +15,11 @@
 //! En bøy er høyst 180°. For å bøye videre legges et nytt punkt inn i
 //! senterlinjen, og resten fra det punktet bøyes på nytt (`bend_from`).
 //!
-//! Hvor på uttrekket buen ligger (`pivot`), er ikke avklart med Sivert.
-//! Den er derfor en eksplisitt parameter og ikke en innebygd regel.
+//! Bøyen starter på midten av kurven, og scroll utvider den (avklart med
+//! Sivert 28. oktober 2026). Midten av buen ligger derfor i halve lengden
+//! (`DEFAULT_PIVOT`), og en større radius gjør buen lengre like langt til
+//! begge sider. Når buen når en ende, skyves den inn igjen i stedet for å
+//! forlenge kurven.
 
 use crate::curve::{add, scale};
 use crate::mesh::{dot, normalize, sub, Vec3};
@@ -29,6 +32,9 @@ const MAX_PIECE: f64 = PI / 6.0;
 /// Dokumentert toleranse for bevart buelengde, relativt til S.
 pub const LENGTH_TOLERANCE: f64 = 1e-6;
 
+/// Bøyen starter på midten av kurven.
+pub const DEFAULT_PIVOT: f64 = 0.5;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bend {
     /// Retningen enden bøyes mot, vinkelrett på startretningen.
@@ -39,6 +45,18 @@ pub struct Bend {
     pub radius: f64,
     /// Andel av lengden der midten av buen ligger, 0 til 1.
     pub pivot: f64,
+}
+
+impl Bend {
+    /// Bøy med midten av buen på midten av kurven. Radius styres med scroll.
+    pub fn at_middle(direction: Vec3, angle: f64, radius: f64) -> Bend {
+        Bend {
+            direction,
+            angle,
+            radius,
+            pivot: DEFAULT_PIVOT,
+        }
+    }
 }
 
 /// Største radius som får plass når buen skal ha vinkelen `angle`.
@@ -199,7 +217,7 @@ mod tests {
             direction: [1.0, 0.0, 0.0],
             angle: deg.to_radians(),
             radius,
-            pivot: 0.5,
+            pivot: DEFAULT_PIVOT,
         }
     }
 
@@ -351,6 +369,28 @@ mod tests {
         for i in 0..=10 {
             let u = i as f64 / 10.0;
             assert!(length(sub(head.point_at(u), w.point_at(0.6 * u))) < 1e-6);
+        }
+    }
+
+    #[test]
+    fn boyen_starter_paa_midten_og_scroll_utvider_den_likt_til_begge_sider() {
+        let mid = [45f64.to_radians().sin(), 0.0, 45f64.to_radians().cos()];
+        let mut previous_lead = f64::INFINITY;
+        for radius in [0.0, 5.0, 10.0, 20.0, 40.0] {
+            let b = Bend::at_middle([1.0, 0.0, 0.0], PI / 2.0, radius);
+            let anchors = bent_anchors([0.0; 3], [0.0, 0.0, 1.0], 80.0, &b).unwrap();
+            let w = WorldSpline::new(anchors.clone(), [1.0, 0.0, 0.0]).unwrap();
+            if radius > 0.0 {
+                // Midt på kurven er buen halvveis: tangenten står på 45°.
+                assert!(length(sub(w.frame_at(0.5).t, mid)) < 1e-6, "r = {radius}");
+            }
+            // Buen starter i 40 − rθ/2 mm og vokser like mye mot begge ender.
+            let lead = anchors[1].position[2];
+            let expected = 40.0 - radius * PI / 4.0;
+            assert!((lead - expected).abs() < 1e-9, "r = {radius}: {lead}");
+            assert!(lead <= previous_lead);
+            previous_lead = lead;
+            assert!((w.length - 80.0).abs() / 80.0 < LENGTH_TOLERANCE);
         }
     }
 }
