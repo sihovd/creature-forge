@@ -295,6 +295,12 @@ impl WorldSpline {
     /// Segmentet der `u` ligger, deles med de Casteljau, så formen er uendret.
     pub fn head_until(&self, u: f64) -> Vec<Anchor> {
         let (k, t) = self.locate(u);
+        if t > 1.0 - 1e-9 {
+            // Delingen ligger i ankerpunktet etter segmentet.
+            let mut out = self.anchors[..=k + 1].to_vec();
+            out.last_mut().unwrap().handle_out = [0.0; 3];
+            return out;
+        }
         let mut out: Vec<Anchor> = self.anchors[..=k].to_vec();
         let [p0, p1, p2, p3] = self.segments[k];
         let lerp = |a: Vec3, b: Vec3| add(a, scale(sub(b, a), t));
@@ -310,6 +316,45 @@ impl WorldSpline {
         }
         out.push(Anchor::new(end, sub(r0, end), [0.0; 3], AnchorKind::Smooth));
         out
+    }
+
+    /// Andelen av buelengden der ankerpunkt `k` ligger.
+    pub fn anchor_fraction(&self, k: usize) -> f64 {
+        if k == 0 || self.length <= 0.0 {
+            return 0.0;
+        }
+        let s = self
+            .samples
+            .iter()
+            .rev()
+            .find(|x| x.segment + 1 == k)
+            .map_or(self.length, |x| x.s);
+        (s / self.length).clamp(0.0, 1.0)
+    }
+
+    /// Alle ankerpunktene med et nytt punkt lagt inn i andelen `u` av
+    /// buelengden, og plassen til det nye punktet. Formen er uendret.
+    pub fn with_anchor_at(&self, u: f64) -> (Vec<Anchor>, usize) {
+        let (k, t) = self.locate(u);
+        if t < 1e-9 {
+            return (self.anchors.clone(), k);
+        }
+        if t > 1.0 - 1e-9 {
+            return (self.anchors.clone(), k + 1);
+        }
+        let [p0, p1, p2, p3] = self.segments[k];
+        let lerp = |a: Vec3, b: Vec3| add(a, scale(sub(b, a), t));
+        let (q0, q1, q2) = (lerp(p0, p1), lerp(p1, p2), lerp(p2, p3));
+        let (r0, r1) = (lerp(q0, q1), lerp(q1, q2));
+        let mid = lerp(r0, r1);
+        let mut out = self.anchors.clone();
+        out[k].handle_out = sub(q0, p0);
+        out[k + 1].handle_in = sub(q2, p3);
+        out.insert(
+            k + 1,
+            Anchor::new(mid, sub(r0, mid), sub(r1, mid), AnchorKind::Smooth),
+        );
+        (out, k + 1)
     }
 
     pub fn start_frame(&self) -> Frame {
@@ -365,6 +410,296 @@ fn transport(prev: &Frame, p: Vec3, t: Vec3) -> Frame {
         t,
         u,
         v: cross(t, u),
+    }
+}
+
+/// En redigering av skjelettet slik grensesnittet sender den. Et drag kan
+/// bestå av flere redigeringer etter hverandre (`Batch`) og er likevel ett
+/// angresteg.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SkeletonEdit {
+    /// Ny rett rotspline fra `start` i retningen `direction`.
+    AddRoot {
+        start: Vec3,
+        direction: Vec3,
+        length: f64,
+        thickness: f64,
+    },
+    /// Ny rett gren fra andelen `at` av forelderen.
+    AddChild {
+        parent: SplineId,
+        at: f64,
+        direction: Vec3,
+        length: f64,
+        thickness: f64,
+    },
+    MoveAnchor {
+        spline: SplineId,
+        index: usize,
+        position: Vec3,
+    },
+    /// Flytter siste punkt, uansett hvor mange punkter splinen har fått.
+    MoveTip {
+        spline: SplineId,
+        position: Vec3,
+    },
+    SetHandle {
+        spline: SplineId,
+        index: usize,
+        side: Side,
+        position: Vec3,
+    },
+    SetKind {
+        spline: SplineId,
+        index: usize,
+        anchor_kind: AnchorKind,
+    },
+    /// Legger inn et punkt i andelen `at` uten å endre formen.
+    InsertAnchor {
+        spline: SplineId,
+        at: f64,
+    },
+    /// Forlenger (eller forkorter) siste del langs endens retning, i mm.
+    Extend {
+        spline: SplineId,
+        delta: f64,
+    },
+    /// Bøyer resten av splinen fra ankerpunkt `from` med låst lengde.
+    Bend {
+        spline: SplineId,
+        from: usize,
+        direction: Vec3,
+        angle: f64,
+        radius: f64,
+    },
+    Reattach {
+        spline: SplineId,
+        at: f64,
+    },
+    SetThickness {
+        spline: SplineId,
+        thickness: f64,
+    },
+    Remove {
+        spline: SplineId,
+    },
+    Batch {
+        edits: Vec<SkeletonEdit>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    In,
+    Out,
+}
+
+/// Rett spline med to myke ankerpunkter.
+fn straight_anchors(start: Vec3, direction: Vec3, length: f64) -> Result<Vec<Anchor>, String> {
+    let d = normalize(direction);
+    if !(length.is_finite() && length > 0.0) || (crate::mesh::length(d) - 1.0).abs() > 1e-9 {
+        return Err("En ny spline trenger retning og lengde".into());
+    }
+    let h = scale(d, length / 3.0);
+    Ok(vec![
+        Anchor::new(start, [0.0; 3], h, AnchorKind::Smooth),
+        Anchor::new(
+            add(start, scale(d, length)),
+            scale(h, -1.0),
+            [0.0; 3],
+            AnchorKind::Smooth,
+        ),
+    ])
+}
+
+impl Skeleton {
+    /// Utfører en redigering. Ved feil er skjelettet uendret. Returnerer id-en
+    /// til en ny spline når redigeringen lager en.
+    pub fn apply(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
+        let mut next = self.clone();
+        let created = next.apply_inner(edit)?;
+        *self = next;
+        Ok(created)
+    }
+
+    fn apply_inner(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
+        use SkeletonEdit as E;
+        match *edit {
+            E::AddRoot {
+                start,
+                direction,
+                length,
+                thickness,
+            } => {
+                let anchors = straight_anchors(start, direction, length)?;
+                // Rammens U står vinkelrett på retningen; velg den mest stabile aksen.
+                let up = if direction[1].abs() < 0.9 * crate::mesh::length(direction) {
+                    [0.0, 1.0, 0.0]
+                } else {
+                    [0.0, 0.0, 1.0]
+                };
+                return self.add_root(anchors, up, thickness).map(Some);
+            }
+            E::AddChild {
+                parent,
+                at,
+                direction,
+                length,
+                thickness,
+            } => {
+                let start = self.world_spline(parent)?.point_at(at);
+                let anchors = straight_anchors(start, direction, length)?;
+                return self.add_child(parent, at, anchors, thickness).map(Some);
+            }
+            E::MoveAnchor {
+                spline,
+                index,
+                position,
+            } => self.move_anchor(spline, index, position)?,
+            E::MoveTip { spline, position } => {
+                let last = self
+                    .spline(spline)
+                    .ok_or("Splinen finnes ikke")?
+                    .anchors
+                    .len()
+                    - 1;
+                self.move_anchor(spline, last, position)?
+            }
+            E::SetHandle {
+                spline,
+                index,
+                side,
+                position,
+            } => {
+                let side = match side {
+                    Side::In => HandleSide::In,
+                    Side::Out => HandleSide::Out,
+                };
+                self.set_handle(spline, index, side, position)?
+            }
+            E::SetKind {
+                spline,
+                index,
+                anchor_kind,
+            } => self.set_anchor_kind(spline, index, anchor_kind)?,
+            E::InsertAnchor { spline, at } => {
+                let (anchors, _) = self.world_spline(spline)?.with_anchor_at(at);
+                self.set_world_anchors(spline, anchors)?
+            }
+            E::Extend { spline, delta } => {
+                let world = self.world_spline(spline)?;
+                let last = world.segments.last().unwrap();
+                let t = bezier_tangent(last, 1.0).ok_or("Enden mangler retning")?;
+                let mut anchors = world.anchors;
+                let end = anchors.last_mut().unwrap();
+                end.position = add(end.position, scale(t, delta));
+                self.set_world_anchors(spline, anchors)?
+            }
+            E::Bend {
+                spline,
+                from,
+                direction,
+                angle,
+                radius,
+            } => {
+                let world = self.world_spline(spline)?;
+                if from + 1 >= world.anchors.len() {
+                    return Err("Bøyen må starte før siste punkt".into());
+                }
+                let bend = crate::bend::Bend::at_middle(direction, angle, radius);
+                let anchors = crate::bend::bend_from(&world, world.anchor_fraction(from), &bend)?;
+                self.set_world_anchors(spline, anchors)?
+            }
+            E::Reattach { spline, at } => self.reattach(spline, at)?,
+            E::SetThickness { spline, thickness } => self.set_thickness(spline, thickness)?,
+            E::Remove { spline } => self.remove(spline)?,
+            E::Batch { ref edits } => {
+                let mut created = None;
+                for e in edits {
+                    created = self.apply_inner(e)?.or(created);
+                }
+                return Ok(created);
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Skjelettet slik visningen trenger det, i verdenskoordinater.
+#[derive(Clone, Debug, Serialize)]
+pub struct SplineView {
+    pub id: SplineId,
+    pub parent: Option<SplineId>,
+    pub at: f64,
+    pub thickness: f64,
+    pub length: f64,
+    /// Punkter langs kurven for tegning.
+    pub points: Vec<Vec3>,
+    pub anchors: Vec<AnchorView>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AnchorView {
+    pub position: Vec3,
+    /// Håndtakenes endepunkter (ikke forskyvninger).
+    pub handle_in: Vec3,
+    pub handle_out: Vec3,
+    pub kind: AnchorKind,
+    /// Andel av buelengden der punktet ligger.
+    pub at: f64,
+    /// Kurvens retning ut fra punktet (inn mot punktet for siste punkt).
+    pub tangent: Vec3,
+}
+
+/// Punkter per segment i tegningen av en spline.
+pub const VIEW_POINTS_PER_SEGMENT: usize = 24;
+
+impl Skeleton {
+    pub fn view(&self) -> Result<Vec<SplineView>, String> {
+        let world = self.evaluate()?;
+        Ok(world
+            .iter()
+            .map(|(id, w)| {
+                let spline = &self.splines[id];
+                let n = VIEW_POINTS_PER_SEGMENT;
+                let mut points = vec![w.segments[0][0]];
+                for seg in &w.segments {
+                    points.extend((1..=n).map(|i| bezier_point(seg, i as f64 / n as f64)));
+                }
+                let last = w.anchors.len() - 1;
+                let anchors = w
+                    .anchors
+                    .iter()
+                    .enumerate()
+                    .map(|(k, a)| {
+                        let tangent = if k < last {
+                            bezier_tangent(&w.segments[k], 0.0)
+                        } else {
+                            bezier_tangent(&w.segments[k - 1], 1.0)
+                        };
+                        AnchorView {
+                            position: a.position,
+                            handle_in: add(a.position, a.handle_in),
+                            handle_out: add(a.position, a.handle_out),
+                            kind: a.kind,
+                            at: w.anchor_fraction(k),
+                            tangent: tangent.unwrap_or([0.0; 3]),
+                        }
+                    })
+                    .collect();
+                SplineView {
+                    id: *id,
+                    parent: spline.attachment.map(|a| a.parent),
+                    at: spline.attachment.map_or(0.0, |a| a.at),
+                    thickness: spline.thickness,
+                    length: w.length,
+                    points,
+                    anchors,
+                }
+            })
+            .collect())
     }
 }
 
@@ -1013,5 +1348,93 @@ mod tests {
         sk.remove(child).unwrap();
         assert_eq!(sk.ids(), vec![root]);
         assert!(sk.spline(gc).is_none());
+    }
+
+    #[test]
+    fn redigeringer_fra_grensesnittet() {
+        use SkeletonEdit as E;
+        let mut sk = Skeleton::new();
+        let root = sk
+            .apply(&E::AddRoot {
+                start: [0.0; 3],
+                direction: [0.0, 1.0, 0.0],
+                length: 60.0,
+                thickness: 4.0,
+            })
+            .unwrap()
+            .unwrap();
+        let child = sk
+            .apply(&E::AddChild {
+                parent: root,
+                at: 0.25,
+                direction: [1.0, 0.0, 0.0],
+                length: 20.0,
+                thickness: 2.0,
+            })
+            .unwrap()
+            .unwrap();
+        // Nytt punkt endrer ikke formen eller festet.
+        let before = sk.evaluate().unwrap();
+        sk.apply(&E::InsertAnchor {
+            spline: root,
+            at: 0.5,
+        })
+        .unwrap();
+        let after = sk.evaluate().unwrap();
+        assert_eq!(after[&root].anchors.len(), 3);
+        for i in 0..=10 {
+            let u = i as f64 / 10.0;
+            assert!(close(
+                before[&root].point_at(u),
+                after[&root].point_at(u),
+                1e-6
+            ));
+        }
+        assert!(close(
+            after[&child].point_at(1.0),
+            before[&child].point_at(1.0),
+            1e-6
+        ));
+        // Forleng langs enden.
+        sk.apply(&E::Extend {
+            spline: root,
+            delta: 15.0,
+        })
+        .unwrap();
+        assert!((sk.world_spline(root).unwrap().length - 75.0).abs() < 1e-6);
+        // Bøy fra det nye punktet: delen før er uendret, lengden er låst.
+        let w = sk.world_spline(root).unwrap();
+        let (len, head) = (w.length, w.point_at(0.2));
+        sk.apply(&E::Bend {
+            spline: root,
+            from: 1,
+            direction: [1.0, 0.0, 0.0],
+            angle: PI,
+            radius: 5.0,
+        })
+        .unwrap();
+        let w = sk.world_spline(root).unwrap();
+        assert!((w.length - len).abs() / len < 1e-6);
+        assert!(close(w.point_at(0.2), head, 1e-4));
+        // En samling er ett steg: feiler én del, endres ingenting.
+        let snapshot = sk.clone();
+        let bad = E::Batch {
+            edits: vec![
+                E::Extend {
+                    spline: root,
+                    delta: 5.0,
+                },
+                E::Remove { spline: 77 },
+            ],
+        };
+        assert!(sk.apply(&bad).is_err());
+        assert_eq!(sk, snapshot);
+        // JSON fra grensesnittet tolkes.
+        let edit: SkeletonEdit = serde_json::from_str(
+            r#"{"kind":"setKind","spline":1,"index":1,"anchor_kind":"corner"}"#,
+        )
+        .unwrap();
+        sk.apply(&edit).unwrap();
+        assert_eq!(sk.spline(root).unwrap().anchors[1].kind, AnchorKind::Corner);
     }
 }
