@@ -4,7 +4,7 @@ Nettleserbasert 3D-modellering av artikulerte figurer for 3D-print, med forming 
 
 ## Prosjektgrunnlag
 
-Les [produktdefinisjonen og den tekniske funksjonsspesifikasjonen](docs/Creature_Forge_spesifikasjon.md) før implementasjon. Gjeldende versjon er 1.1 fra 27. oktober 2026.
+Les [produktdefinisjonen og den tekniske funksjonsspesifikasjonen](docs/Creature_Forge_spesifikasjon.md) før implementasjon. Gjeldende versjon er 1.2 fra 28. oktober 2026.
 
 Spesifikasjonen skiller mellom avklarte krav, tidligere produktretning, tekniske forslag og egenskaper som må verifiseres. Den inneholder 25 akseptansetester. Forslag til biblioteker og ytelsesmål er ikke ferdig validerte valg.
 
@@ -21,6 +21,8 @@ Milepæl 1 ([PR #1](https://github.com/sihovd/creature-forge/pull/1)) legger inn
 Formgrep er på plass: kontrollpunkter fordelt etter punktavstand, pil og påvirkningsområde ved hover, uttrekk og innpressing ved drag med lokal kantdeling, Escape for å avbryte, og angre og gjør om der hvert drag er ett steg. Nettlesertestene dekker deler av CF01–CF03, CF06 og CF21 med mus på desktop; berøring er ikke automatisk testet ennå.
 
 Bøying og senterlinje: uttrekket følger en kubisk Hermite-kurve fra A til grepet B med rotasjonsminimerende rammer. Alt flytter grepet i planet vinkelrett på den opprinnelige uttrekksretningen. Det er spesifikasjonens anbefalte startpunkt og er ikke bekreftet av Sivert ennå. Alt + Shift låser den rette avstanden A–B og roterer B rundt A, og de samme modusene finnes som knapper. Etter slipp vises senterlinjen, og tuppen kan dras for å endre bøyningen. Endringen er én angrebar operasjon som erstatter uttrekkets parametere. Lagring og et ferdig grensesnitt gjenstår.
+
+Spline-skjelett ([issue #4](https://github.com/sihovd/creature-forge/issues/4)): kjernen har fått et skjelett av Bézier-spliner der barn er festet til forelderens kurve, og bøying med låst buelengde. Dette er foreløpig bare i Rust med tester og er ikke koblet til appen. Gjennomgang, rekkefølge og åpne spørsmål står i [planen for spline-skjelettet](docs/spline_skjelett_plan.md).
 
 Sivert avklarte 27. oktober 2026 at brukeren skal se et tomt arbeidsrom når appen starter. Spesifikasjonen (kapittel 3, steg 1) er oppdatert tilsvarende.
 

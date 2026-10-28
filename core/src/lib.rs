@@ -4,11 +4,13 @@
 //! meshdata tilbake (se spesifikasjonen kap. 17). Alle lengder er i
 //! millimeter.
 
+pub mod bend;
 pub mod curve;
 pub mod document;
 pub mod mesh;
 pub mod pull;
 pub mod refine;
+pub mod skeleton;
 pub mod sphere;
 
 use document::{control_points, Document};
