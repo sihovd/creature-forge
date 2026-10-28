@@ -16,16 +16,15 @@ Konklusjon: dagens senterlinje er en egenskap ved én meshdeformasjon. Issue #4 
 
 ## Endring i betjeningen
 
-Issue #4 er nyere enn spesifikasjonen kapittel 5 og har forrang:
+Issue #4 og Siverts avklaring 28. oktober 2026 er nyere enn spesifikasjonen kapittel 5 og har forrang. Issuen nevnte Shift for bøying; Sivert presiserte at det er Alt + Shift.
 
 | Input | Før (kap. 5) | Nå (issue #4) |
 | --- | --- | --- |
 | Dra | Uttrekk langs normalen | Forleng langs uttrekksretningen |
-| Alt + dra | Flytt i lokalt XY | Flytt ytterpunktet i planet vinkelrett på uttrekksretningen |
-| Alt + Shift + dra | Lås rett avstand A–B | Ikke nevnt. Foreslås fjernet når Shift-bøying er på plass |
-| Shift + dra | – | Bøying med låst buelengde, synlige håndtak og vinkelvisning |
+| Alt + dra | Flytt i lokalt XY | Panorer: flytt ytterpunktet i planet vinkelrett på uttrekksretningen |
+| Alt + Shift + dra | Lås rett avstand A–B | Bøying med låst buelengde, synlige håndtak og vinkelvisning. Erstatter låsen av rett avstand |
 | Ctrl under bøying | – | Vinkelsnapping (15° eller 30°) |
-| Scroll under bøying | – | Juster bøyeradius |
+| Scroll under bøying | – | Still størrelsen på kurven (bøyeradius) |
 
 ## Rekkefølge
 
@@ -40,7 +39,7 @@ Issue #4 er nyere enn spesifikasjonen kapittel 5 og har forrang:
 
 **Trinn 2: Skjelettet i appen.** Wasm-grensesnitt, visning av ankerpunkter og håndtak, legge til rot- og barnespliner, angre og gjør om, og lagring/åpning av prosjektfil (overlapper milepæl 2). Hele hierarkiet er ett formlag.
 
-**Trinn 3: Kontrollert uttrekk og bøying.** Dra, Alt, Shift, Ctrl og scroll som i tabellen over, med visning av vinkel, retning og bøyeplan. Bøyen starter på midten av kurven, og scroll utvider den.
+**Trinn 3: Kontrollert uttrekk og bøying.** Dra, Alt, Alt + Shift, Ctrl og scroll som i tabellen over, med visning av vinkel, retning og bøyeplan. Bøyen starter på midten av kurven, og scroll utvider den.
 
 **Trinn 4: Overflate fra skjelettet med sirkel og ellipse.** Hver spline får tverrsnitt langs kurven. For at forgreninger skal bli sammenhengende former og ikke overlappende rør, foreslås et avstandsfelt rundt hver spline (feid tverrsnitt) med glatt sammensmelting, og en overflate hentet ut av feltet (for eksempel dual contouring eller surface nets i Rust). Dagens kjerne har ingen slik representasjon, så dette er en ny del som må måles for ytelse og detaljnivå. Endeprofilen bevares helt ut; en spiss er tilfellet der profilen går til null.
 
@@ -54,7 +53,7 @@ Surface tools er et eget verktøysystem og inngår ikke.
 
 ## Åpne spørsmål til Sivert
 
-1. **Alt + Shift.** Skal den gamle låsen av rett avstand fjernes når Shift-bøying finnes, eller beholdes som egen modus?
+Ingen på nåværende tidspunkt. Pivot, grense på 180° og Alt + Shift er avklart 28. oktober 2026.
 
 ## Verifikasjon i trinn 1
 

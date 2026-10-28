@@ -20,7 +20,7 @@ Milepæl 1 ([PR #1](https://github.com/sihovd/creature-forge/pull/1)) legger inn
 
 Formgrep er på plass: kontrollpunkter fordelt etter punktavstand, pil og påvirkningsområde ved hover, uttrekk og innpressing ved drag med lokal kantdeling, Escape for å avbryte, og angre og gjør om der hvert drag er ett steg. Nettlesertestene dekker deler av CF01–CF03, CF06 og CF21 med mus på desktop; berøring er ikke automatisk testet ennå.
 
-Bøying og senterlinje: uttrekket følger en kubisk Hermite-kurve fra A til grepet B med rotasjonsminimerende rammer. Alt flytter grepet i planet vinkelrett på den opprinnelige uttrekksretningen. Det er spesifikasjonens anbefalte startpunkt og er ikke bekreftet av Sivert ennå. Alt + Shift låser den rette avstanden A–B og roterer B rundt A, og de samme modusene finnes som knapper. Etter slipp vises senterlinjen, og tuppen kan dras for å endre bøyningen. Endringen er én angrebar operasjon som erstatter uttrekkets parametere. Lagring og et ferdig grensesnitt gjenstår.
+Bøying og senterlinje: uttrekket følger en kubisk Hermite-kurve fra A til grepet B med rotasjonsminimerende rammer. Alt flytter grepet i planet vinkelrett på den opprinnelige uttrekksretningen. Det er spesifikasjonens anbefalte startpunkt og er ikke bekreftet av Sivert ennå. Alt + Shift låser den rette avstanden A–B og roterer B rundt A, og de samme modusene finnes som knapper. Etter slipp vises senterlinjen, og tuppen kan dras for å endre bøyningen. Endringen er én angrebar operasjon som erstatter uttrekkets parametere. Lagring og et ferdig grensesnitt gjenstår. Appen bruker ennå den gamle låsen av rett avstand; den erstattes av bøying med låst buelengde (se planen for spline-skjelettet).
 
 Spline-skjelett ([issue #4](https://github.com/sihovd/creature-forge/issues/4)): kjernen har fått et skjelett av Bézier-spliner der barn er festet til forelderens kurve, og bøying med låst buelengde. Dette er foreløpig bare i Rust med tester og er ikke koblet til appen. Gjennomgang, rekkefølge og åpne spørsmål står i [planen for spline-skjelettet](docs/spline_skjelett_plan.md).
 
@@ -57,7 +57,7 @@ npm run build && npm run test:e2e   # nettlesertester (desktop og mobil)
 ## Sentrale krav
 
 - Trekk ut et kontrollpunkt eller et markert meshområde og bøy formen.
-- Alt + Shift låser avstanden mellom startpunkt og grep. Senterlinjen beholdes for videre redigering.
+- Alt panorerer grepet. Alt + Shift bøyer med låst buelengde, og scroll stiller bøyeradius. Senterlinjen beholdes for videre redigering.
 - Oppdater topologien dynamisk ved både utvidelse, bøyning og krymping.
 - Deformer sekundærformens egen geometri etter underlagets fasong og krumming.
 - Hold tykkelse, offset, avrunding og blending som separate egenskaper.

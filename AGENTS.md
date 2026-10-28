@@ -19,7 +19,7 @@ Ved gjennomgang skal ChatGPT/Codex kontrollere den konkrete revisjonen, skille e
 - Ikke behandle foreslåtte teknologier, terskler eller ytelsesmål som godkjente eller oppnådde egenskaper.
 - Ikke anta at kode fra Claude-artefakten oppfyller spesifikasjonen. Bevar importert kilde og registrer opprinnelse og eventuelle endringer.
 - Sekundærformer skal deformeres geometrisk etter underlaget; flytting og rotasjon av en stiv mesh er utilstrekkelig.
-- Alt + Shift låser rett avstand fra rot til grep, ikke automatisk buelengden.
+- Alt panorerer grepet i planet vinkelrett på uttrekksretningen. Alt + Shift bøyer med låst buelengde, og scroll stiller bøyeradius (avklart 28. oktober 2026, erstatter låsen av rett avstand).
 - Bevar varige senterlinjer og stabile overflatefester gjennom remeshing.
 - Skill kroppsdelens fysiske volum, formens gruppe og dens overflateavhengighet.
 - Separate bevegelige deler må ikke utilsiktet smeltes sammen.
