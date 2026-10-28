@@ -2,7 +2,7 @@
 
 ## Produktdefinisjon og teknisk funksjonsspesifikasjon
 
-Versjon 1.1 · 27. oktober 2026 · Utarbeidet for Sivert Hovde
+Versjon 1.2 · 28. oktober 2026 · Utarbeidet for Sivert Hovde
 
 Creature Forge skal være et fullverdig modelleringsprogram i nettleseren for å lage egne artikulerte figurer for 3D-print. Brukeren former kroppsdeler direkte, bygger detaljer som overflatefølgende lag og forbinder delene med redigerbare ledd. Under dette skal en geometrimotor håndtere triangulering, deformasjon, sammenføyninger, utskjæringer og kontroll av produksjonsgeometrien.
 
@@ -87,6 +87,8 @@ En utvekst skal ikke få en skjult kobling til skjermens dybdeakse. Ved vanlig u
 
 ## 5 Alt og den låste tråden
 
+**K, 28. oktober 2026.** [Issue #4](https://github.com/sihovd/creature-forge/issues/4) endrer modifikatorene for uttrekk: dra forlenger langs uttrekksretningen, Alt panorerer ytterpunktet i planet vinkelrett på uttrekksretningen, Alt + Shift bøyer med låst **buelengde** (presisert av Sivert; issuen sa Shift), Ctrl snapper vinkelen under bøying og scroll stiller størrelsen på kurven (bøyeradius). Bøying skal kunne gå i alle retninger og opptil 180° per bøy; for å fortsette legger brukeren til et punkt i bøyen og bøyer videre derfra (avklart med Sivert 28. oktober 2026), radius null gir en eksplisitt knekk, og en radius som ikke får plass begrenses uten at lengden økes. Bøyen starter på midten av kurven, og scroll utvider den (avklart 28. oktober 2026). Låsen av rett avstand A–B i teksten under er erstattet av bøying med låst buelengde. Teksten beskriver dagens oppførsel i appen til den nye er på plass. Se [planen for spline-skjelettet](spline_skjelett_plan.md).
+
 ### Den avklarte oppførselen
 
 **K.** A er startpunktet før draget. Først trekkes grepet B ut fra A, rett ut i forhold til overflaten. Når Alt + Shift holdes inne, låses den nåværende lengden på tråden mellom A og B. B kan deretter beveges rundt A. Dette styrer bøyningen og retningen på den uttrukne meshen.
@@ -110,6 +112,8 @@ Kameraet skal ikke samtidig rotere under samme drag. Bytte mellom vanlig dra, Al
 **F.** Motoren bruker i tillegg rotens tangent, eksisterende kurve, en eksplisitt regel for krumning og transport av tverrsnitt. Grunnmodusen låser trådlengden, slik brukeren har definert. En eventuell separat funksjon for å bevare materiallengde må være et eget valg. Programmet skal ikke love begge egenskaper samtidig for vilkårlige grep.
 
 ## 6 Senterlinjen som varig redigeringsverktøy
+
+**K, 28. oktober 2026 (issue #4).** Senterlinjene er skjelettet alle former bygges rundt. De redigeres som Bézier-kurver med ankerpunkter, myke punkter, hjørnepunkter og synlige håndtak. En barnespline er varig festet til et punkt på forelderens kurve, ikke til mesh eller overflate. Barn og undergrener følger når forelderen flyttes eller bøyes; redigering av et barn flytter ikke forelderen; tykkelse flytter ikke festet; koblingene bevares ved lagring. Hele hierarkiet er ett formlag. Rundt senterlinjen ligger tverrsnittsprofiler (først sirkel og ellipse, senere lukkede 2D-spliner med master og forekomster), og forgreninger skal bli sammenhengende former. Surface tools er et eget verktøysystem.
 
 **K.** Når musen slippes, beholdes en redigerbar senterlinje gjennom den uttrukne formen. Meshen følger senere endringer av linjen og får oppdatert triangulering.
 
