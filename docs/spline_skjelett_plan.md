@@ -35,7 +35,7 @@ Issue #4 er nyere enn spesifikasjonen kapittel 5 og har forrang:
 - `core/src/skeleton.rs`: spliner av kubiske Bézier-segmenter med ankerpunkter, inn- og uthåndtak, myke punkter og hjørnepunkter.
 - Hierarki: et barn er festet til en andel av forelderens **buelengde**. Barnets punkter lagres i festets lokale ramme. Dermed følger barn og undergrener når forelderen flyttes, bøyes eller redigeres med håndtak, og redigering av barnet endrer aldri forelderen. Festet er knyttet til kurven, ikke til mesh eller overflate.
 - Tykkelse er en egen egenskap per spline og påvirker ikke festene.
-- `core/src/bend.rs`: bøying med låst buelengde. Rett del, sirkelbue og rett rest summerer alltid til S. Vinkel 0–180° i en vilkårlig retning, slik at enderetningen kan ligge hvor som helst på en kule. Radius begrenses til S/θ, og radius null gir en eksplisitt knekk. Snapping er en egen funksjon.
+- `core/src/bend.rs`: bøying med låst buelengde. Rett del, sirkelbue og rett rest summerer alltid til S. Vinkel 0–180° i en vilkårlig retning, slik at enderetningen kan ligge hvor som helst på en kule. Radius begrenses til S/θ, og radius null gir en eksplisitt knekk. Snapping er en egen funksjon. En bøy er høyst 180°; for å fortsette legges et nytt punkt inn i senterlinjen og resten bøyes derfra med låst lengde (`bend_from`), avklart med Sivert 28. oktober 2026.
 - Lagring som JSON med format og versjon, med kontroll av fester, sløyfer og tall ved åpning.
 
 **Trinn 2: Skjelettet i appen.** Wasm-grensesnitt, visning av ankerpunkter og håndtak, legge til rot- og barnespliner, angre og gjør om, og lagring/åpning av prosjektfil (overlapper milepæl 2). Hele hierarkiet er ett formlag.
@@ -56,7 +56,6 @@ Surface tools er et eget verktøysystem og inngår ikke.
 
 1. **Pivot for bøyen.** I kjernen er buens plassering en parameter (`pivot`, andel av lengden der midten av buen ligger). Forslag til prototype: (a) buen sentrert der grepet ble tatt, (b) buen starter ved roten, (c) buen ligger like før enden. Dette låses først etter at du har prøvd det.
 2. **Alt + Shift.** Skal den gamle låsen av rett avstand fjernes når Shift-bøying finnes, eller beholdes som egen modus?
-3. **Vinkel over 180°.** Kjernen tillater nå opptil 180°. Skal den kunne gå lenger, med risiko for at formen krysser seg selv?
 
 ## Verifikasjon i trinn 1
 
@@ -68,6 +67,7 @@ Kjørt med `cargo test` i denne PR-en:
 - Bézier-håndtak på forelderen: mykt punkt retter inn motsatt håndtak, hjørnepunkt holder dem uavhengige, og hierarkiet består.
 - Buelengde ved 0–180°, radius 0–1000 mm, flere pivoter og snappet vinkel: største relative avvik målt til 1,9·10⁻⁷, krav i testen er 10⁻⁶ (`LENGTH_TOLERANCE`).
 - 90° gir enderetning vinkelrett, 180° vender enden tilbake.
+- Nytt punkt i bøyen og to bøyer på 180° etter hverandre gir 360° med uendret lengde og uendret del før punktet.
 - Radius null gir en knekk med gyldig senterlinje og ortonormale rammer gjennom knekken, også ved 180°.
 - Lagring og åpning gir likt skjelett. Ukjent format, manglende forelder og sløyfer avvises.
 

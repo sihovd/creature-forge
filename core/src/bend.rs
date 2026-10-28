@@ -12,12 +12,15 @@
 //! buelengde er da under 1e-6 av S (se testene). Håndtakenes lengde er en
 //! følge av radien og vinkelen; den er ikke selve bøyeradien.
 //!
+//! En bøy er høyst 180°. For å bøye videre legges et nytt punkt inn i
+//! senterlinjen, og resten fra det punktet bøyes på nytt (`bend_from`).
+//!
 //! Hvor på uttrekket buen ligger (`pivot`), er ikke avklart med Sivert.
 //! Den er derfor en eksplisitt parameter og ikke en innebygd regel.
 
 use crate::curve::{add, scale};
 use crate::mesh::{dot, normalize, sub, Vec3};
-use crate::skeleton::{Anchor, AnchorKind};
+use crate::skeleton::{Anchor, AnchorKind, WorldSpline};
 use std::f64::consts::PI;
 
 /// Største vinkel per Bézier-segment i buen.
@@ -155,6 +158,31 @@ pub fn bent_anchors(
     Ok(anchors)
 }
 
+/// Legger inn et punkt i andelen `at` av buelengden og bøyer resten av
+/// senterlinjen derfra med låst lengde. Delen før punktet er uendret, og
+/// den samlede buelengden er den samme. Slik kan en bøy fortsette forbi
+/// 180° med flere bøyer etter hverandre.
+pub fn bend_from(spline: &WorldSpline, at: f64, bend: &Bend) -> Result<Vec<Anchor>, String> {
+    let at = at.clamp(0.0, 1.0);
+    let rest = spline.length * (1.0 - at);
+    if rest < 1e-9 {
+        return Err("Det er ingen lengde igjen å bøye etter punktet".into());
+    }
+    let frame = spline.frame_at(at);
+    let mut anchors = spline.head_until(at);
+    let tail = bent_anchors(frame.origin, frame.t, rest, bend)?;
+    // Punktet deles av hode og hale: inn-håndtak fra hodet, ut-håndtak fra halen.
+    let joint = anchors.last_mut().unwrap();
+    joint.handle_out = tail[0].handle_out;
+    joint.kind = if tail[0].kind == AnchorKind::Corner {
+        AnchorKind::Corner
+    } else {
+        AnchorKind::Smooth
+    };
+    anchors.extend_from_slice(&tail[1..]);
+    Ok(anchors)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +309,48 @@ mod tests {
     fn rett_uttrekk_naar_vinkelen_er_null() {
         let w = spline(&bend(0.0, 20.0));
         assert!(length(sub(w.point_at(1.0), [0.0, 0.0, 80.0])) < 1e-9);
+    }
+
+    #[test]
+    fn nytt_punkt_i_boyen_lar_den_fortsette_forbi_180_grader() {
+        let first = spline(&Bend {
+            pivot: 0.0,
+            ..bend(180.0, 10.0)
+        });
+        // Buen er 10π mm lang og starter i roten; nytt punkt der den slutter.
+        let at = 10.0 * PI / 80.0;
+        let before = first.point_at(at * 0.5);
+        let anchors = bend_from(
+            &first,
+            at,
+            &Bend {
+                pivot: 0.0,
+                ..bend(180.0, 10.0)
+            },
+        )
+        .unwrap();
+        let w = WorldSpline::new(anchors, [1.0, 0.0, 0.0]).unwrap();
+        // Lengden er låst, delen før punktet er uendret, og to 180° gir 360°.
+        assert!(
+            (w.length - 80.0).abs() / 80.0 < LENGTH_TOLERANCE,
+            "{}",
+            w.length
+        );
+        let moved = length(sub(w.point_at(at * 0.5), before));
+        assert!(moved < LENGTH_TOLERANCE * 80.0, "{moved:e}");
+        assert!(length(sub(end_tangent(&w), [0.0, 0.0, 1.0])) < 1e-6);
+        // Over 180° i én bøy begrenses vinkelen.
+        assert!((effective(&bend(270.0, 10.0), 80.0).angle - PI).abs() < 1e-12);
+    }
+
+    #[test]
+    fn deling_av_kurven_endrer_ikke_formen() {
+        let w = spline(&bend(90.0, 20.0));
+        let head = WorldSpline::new(w.head_until(0.6), [1.0, 0.0, 0.0]).unwrap();
+        assert!((head.length - 0.6 * w.length).abs() < 1e-6);
+        for i in 0..=10 {
+            let u = i as f64 / 10.0;
+            assert!(length(sub(head.point_at(u), w.point_at(0.6 * u))) < 1e-6);
+        }
     }
 }

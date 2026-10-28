@@ -291,6 +291,27 @@ impl WorldSpline {
         }
     }
 
+    /// Ankerpunktene for delen fra starten til andelen `u` av buelengden.
+    /// Segmentet der `u` ligger, deles med de Casteljau, så formen er uendret.
+    pub fn head_until(&self, u: f64) -> Vec<Anchor> {
+        let (k, t) = self.locate(u);
+        let mut out: Vec<Anchor> = self.anchors[..=k].to_vec();
+        let [p0, p1, p2, p3] = self.segments[k];
+        let lerp = |a: Vec3, b: Vec3| add(a, scale(sub(b, a), t));
+        let (q0, q1, q2) = (lerp(p0, p1), lerp(p1, p2), lerp(p2, p3));
+        let (r0, r1) = (lerp(q0, q1), lerp(q1, q2));
+        let end = lerp(r0, r1);
+        let last = out.last_mut().unwrap();
+        last.handle_out = sub(q0, p0);
+        if t < 1e-12 {
+            // Delingen ligger i et ankerpunkt.
+            last.handle_out = [0.0; 3];
+            return out;
+        }
+        out.push(Anchor::new(end, sub(r0, end), [0.0; 3], AnchorKind::Smooth));
+        out
+    }
+
     pub fn start_frame(&self) -> Frame {
         self.samples[0].frame
     }
