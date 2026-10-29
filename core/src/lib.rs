@@ -12,6 +12,7 @@ pub mod pull;
 pub mod refine;
 pub mod skeleton;
 pub mod sphere;
+pub mod surface;
 
 use document::{control_points, Document};
 use pull::Pull;
@@ -71,19 +72,19 @@ pub fn create_sphere(radius_mm: f64, target_edge_mm: f64) -> Result<MeshBuffers,
 /// Versjonen av geometriberegningene. Lagres i prosjektfiler (kap. 19).
 #[wasm_bindgen(js_name = geometryVersion)]
 pub fn geometry_version() -> u32 {
-    3
+    4
 }
 
 /// Dokumentet slik grensesnittet ser det gjennom workeren.
 #[wasm_bindgen(js_name = Document)]
-pub struct JsDocument(Document);
+pub struct JsDocument(Document, Vec<document::ShapePreview>);
 
 #[allow(clippy::new_without_default)]
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {
     #[wasm_bindgen(constructor)]
     pub fn new(target_edge_mm: f64) -> JsDocument {
-        JsDocument(Document::new(target_edge_mm))
+        JsDocument(Document::new(target_edge_mm), Vec::new())
     }
 
     pub fn revision(&self) -> f64 {
@@ -147,59 +148,40 @@ impl JsDocument {
             .map_err(|e| JsError::new(&e))
     }
 
-    #[wasm_bindgen(js_name = previewEdit)]
-    pub fn preview_edit(
-        &self,
-        shape: u32,
-        target: u32,
-        pull: &[f64],
-    ) -> Result<MeshBuffers, JsError> {
-        let mesh = self
-            .0
-            .preview_edit(shape, target as usize, &read_pull(pull)?)
-            .map_err(|e| JsError::new(&e))?;
-        Ok((&mesh).into())
-    }
-
-    #[wasm_bindgen(js_name = commitEdit)]
-    pub fn commit_edit(&mut self, shape: u32, target: u32, pull: &[f64]) -> Result<(), JsError> {
-        self.0
-            .commit_edit(shape, target as usize, read_pull(pull)?)
-            .map_err(|e| JsError::new(&e))
-    }
-
-    /// Senterlinjene til en form, `CENTERLINE_STRIDE` tall per linje:
-    /// historikkplass, radius, A, n0, B og deretter punkter langs kurven.
-    pub fn centerlines(&self, shape: u32) -> Vec<f64> {
-        let mut out = Vec::new();
-        for (target, pull) in self.0.centerlines(shape) {
-            out.push(target as f64);
-            out.push(pull.radius);
-            out.extend(pull.anchor);
-            out.extend(pull.normal);
-            out.extend(pull.tip);
-            let curve = pull.curve();
-            for i in 0..CENTERLINE_SAMPLES {
-                out.extend(curve.point(i as f64 / (CENTERLINE_SAMPLES - 1) as f64));
-            }
-        }
-        out
-    }
-
     /// Skjelettet som JSON for visningen (se `skeleton::SplineView`).
     #[wasm_bindgen(js_name = skeletonView)]
     pub fn skeleton_view(&self) -> Result<String, JsError> {
         view_json(self.0.skeleton())
     }
 
-    /// Visningen av skjelettet med en redigering som ikke lagres.
+    /// Visningen av skjelettet med en redigering som ikke lagres. Meshene
+    /// til de berørte kroppene hentes etterpå med `previewShapes` og
+    /// `previewMesh`.
     #[wasm_bindgen(js_name = previewSkeleton)]
-    pub fn preview_skeleton(&self, edit_json: &str) -> Result<String, JsError> {
-        let skeleton = self
+    pub fn preview_skeleton(&mut self, edit_json: &str) -> Result<String, JsError> {
+        let (skeleton, meshes) = self
             .0
             .preview_skeleton(&read_edit(edit_json)?)
             .map_err(|e| JsError::new(&e))?;
+        self.1 = meshes;
         view_json(&skeleton)
+    }
+
+    /// Kroppene i siste forhåndsvisning av skjelettet.
+    #[wasm_bindgen(js_name = previewShapes)]
+    pub fn preview_shapes(&self) -> Vec<u32> {
+        self.1.iter().map(|(id, _)| *id).collect()
+    }
+
+    /// Meshen til en kropp i siste forhåndsvisning, eller `undefined` når
+    /// kroppen er fjernet.
+    #[wasm_bindgen(js_name = previewMesh)]
+    pub fn preview_mesh(&self, shape: u32) -> Option<MeshBuffers> {
+        self.1
+            .iter()
+            .find(|(id, _)| *id == shape)
+            .and_then(|(_, m)| m.as_ref())
+            .map(Into::into)
     }
 
     /// Utfører en redigering av skjelettet som ett angresteg. Returnerer id-en
@@ -245,8 +227,3 @@ fn read_pull(v: &[f64]) -> Result<Pull, JsError> {
         radius: v[9],
     })
 }
-
-/// Antall punkter per senterlinje som sendes til visningen.
-pub const CENTERLINE_SAMPLES: usize = 33;
-/// Tall per senterlinje: historikkplass, radius, A, n0, B og punktene.
-pub const CENTERLINE_STRIDE: usize = 11 + CENTERLINE_SAMPLES * 3;

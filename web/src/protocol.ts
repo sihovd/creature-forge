@@ -9,8 +9,6 @@ export type Command =
   | { kind: 'addSphere'; center: [number, number, number]; radiusMm: number }
   | { kind: 'previewPull'; shape: number; pull: PullParams }
   | { kind: 'commitPull'; shape: number; pull: PullParams }
-  | { kind: 'previewEdit'; shape: number; target: number; pull: PullParams }
-  | { kind: 'commitEdit'; shape: number; target: number; pull: PullParams }
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'controlPoints'; spacingMm: number }
@@ -73,15 +71,7 @@ export interface ShapeUpdate {
   mesh: MeshResult | null;
   /** Kontrollpunkter: x, y, z, nx, ny, nz per punkt. */
   controlPoints: Float32Array;
-  /**
-   * Senterlinjer, `CENTERLINE_STRIDE` tall per linje: historikkplass, radius,
-   * A, n0, B og deretter `CENTERLINE_SAMPLES` punkter langs kurven.
-   */
-  centerlines: Float64Array;
 }
-
-export const CENTERLINE_SAMPLES = 33;
-export const CENTERLINE_STRIDE = 11 + CENTERLINE_SAMPLES * 3;
 
 export interface DocumentState {
   revision: number;
@@ -92,7 +82,7 @@ export interface DocumentState {
 export type GeometryResult =
   | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; created: number | null }
   | { kind: 'preview'; shape: number; mesh: MeshResult }
-  | { kind: 'skeletonPreview'; skeleton: SplineView[] };
+  | { kind: 'skeletonPreview'; skeleton: SplineView[]; shapes: { shape: number; mesh: MeshResult | null }[] };
 
 export type GeometryResponse =
   | { kind: 'ready'; geometryVersion: number }

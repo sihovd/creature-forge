@@ -115,6 +115,8 @@ Kameraet skal ikke samtidig rotere under samme drag. Bytte mellom vanlig dra, Al
 
 **K, 28. oktober 2026 (issue #4).** Senterlinjene er skjelettet alle former bygges rundt. De redigeres som Bézier-kurver med ankerpunkter, myke punkter, hjørnepunkter og synlige håndtak. En barnespline er varig festet til et punkt på forelderens kurve, ikke til mesh eller overflate. Barn og undergrener følger når forelderen flyttes eller bøyes; redigering av et barn flytter ikke forelderen; tykkelse flytter ikke festet; koblingene bevares ved lagring. Hele hierarkiet er ett formlag. Rundt senterlinjen ligger tverrsnittsprofiler (først sirkel og ellipse, senere lukkede 2D-spliner med master og forekomster), og forgreninger skal bli sammenhengende former. Surface tools er et eget verktøysystem.
 
+**K, 29. oktober 2026.** Det skal alltid være mesh rundt en spline. Også kula har en spline i midten. Deformering med kontrollpunktene (prikkene) skal ikke lage spliner, men oppføre seg som det første formgrepet: uttrekk og innpressing direkte i meshen. Varige senterlinjer fra prikkene, som beskrevet under, gjelder ikke lenger; bøying og forlengelse gjøres med splinene.
+
 **K.** Når musen slippes, beholdes en redigerbar senterlinje gjennom den uttrukne formen. Meshen følger senere endringer av linjen og får oppdatert triangulering.
 
 **F.** Hver uttrekking lagres som en egen formoperasjon med rotfeste, kurve, tverrsnittsbeskrivelse og påvirkningsområde. Den innledende kurven beregnes som en glatt romkurve. En kubisk Hermite-kurve eller en kurve med flere slike segmenter er aktuell fordi endepunkter og tangenter kan styres separat. Konkret kurveregel velges ved tester av ønsket oppførsel, ikke ut fra at to punkter alene skulle være tilstrekkelig.

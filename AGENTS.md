@@ -20,7 +20,8 @@ Ved gjennomgang skal ChatGPT/Codex kontrollere den konkrete revisjonen, skille e
 - Ikke anta at kode fra Claude-artefakten oppfyller spesifikasjonen. Bevar importert kilde og registrer opprinnelse og eventuelle endringer.
 - Sekundærformer skal deformeres geometrisk etter underlaget; flytting og rotasjon av en stiv mesh er utilstrekkelig.
 - Alt panorerer grepet i planet vinkelrett på uttrekksretningen. Alt + Shift bøyer med låst buelengde, og scroll stiller bøyeradius (avklart 28. oktober 2026, erstatter låsen av rett avstand).
-- Bevar varige senterlinjer og stabile overflatefester gjennom remeshing.
+- Alle former bygges rundt spliner med mesh rundt, også kula. Prikkene deformerer bare meshen og lager ingen spliner (avklart 29. oktober 2026).
+- Bevar spline-skjelettet og stabile overflatefester gjennom remeshing.
 - Skill kroppsdelens fysiske volum, formens gruppe og dens overflateavhengighet.
 - Separate bevegelige deler må ikke utilsiktet smeltes sammen.
 - Endre ikke ShapeForge eller Designporten som del av dette repoet.
