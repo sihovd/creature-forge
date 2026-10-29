@@ -33,6 +33,8 @@ export class Viewport {
   private influence: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
   private frameCallbacks: (() => void)[] = [];
+  /** Under konturredigering tar ikke formgrep og skjelett imot pekeren. */
+  interactionLocked = false;
   constructor(private container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -253,6 +255,42 @@ export class Viewport {
     const normal = this.camera.getWorldDirection(new THREE.Vector3());
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
     return this.raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+  }
+
+  /**
+   * Snittvisning for konturredigering: delen av modellen mellom `plane` og
+   * kameraet skjæres bort, og resten tegnes nedtonet og delvis gjennomsiktig
+   * som referanse. `null` gir vanlig visning.
+   */
+  setSection(plane: THREE.Plane | null) {
+    this.renderer.localClippingEnabled = !!plane;
+    for (const m of [this.material, this.lockedMaterial]) {
+      m.clippingPlanes = plane ? [plane] : [];
+      m.side = plane ? THREE.DoubleSide : THREE.FrontSide;
+      m.transparent = !!plane || m === this.lockedMaterial;
+      m.opacity = plane ? 0.45 : m === this.lockedMaterial ? 0.75 : 1;
+      m.depthWrite = !plane;
+      m.needsUpdate = true;
+    }
+    this.pointMarkers.visible = !plane;
+  }
+
+  /** Kameraets plassering, mål og opp-retning, for å kunne sette det tilbake. */
+  cameraState() {
+    return { position: this.camera.position.clone(), target: this.controls.target.clone(), up: this.camera.up.clone() };
+  }
+
+  setCamera(state: { position: THREE.Vector3; target: THREE.Vector3; up: THREE.Vector3 }) {
+    this.camera.up.copy(state.up);
+    this.camera.position.copy(state.position);
+    this.controls.target.copy(state.target);
+    this.camera.lookAt(state.target);
+    this.controls.update();
+  }
+
+  /** Avstanden fra kameraet som gir en synlig høyde på `height` mm. */
+  distanceForHeight(height: number) {
+    return height / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
   }
 
   /** Flytter kameraet tilbake til utgangsvisningen. */

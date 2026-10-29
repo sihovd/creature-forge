@@ -415,3 +415,51 @@ fieldset.sections:disabled .profile-editor { pointer-events: none; opacity: 0.6;
 .segmented button { min-height: 36px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
 .segmented button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .segmented button:disabled { opacity: 0.45; cursor: default; }
+
+/* Konturredigering på modellen (trinn 4). */
+.contour-overlay { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.contour-overlay[hidden] { display: none; }
+.profile-svg.on-model { max-width: none; width: 100%; height: 100%; aspect-ratio: auto; border: 0; border-radius: 0; background: transparent; pointer-events: none; }
+.profile-svg.on-model.drawing-mode { pointer-events: all; cursor: crosshair; }
+.profile-svg.on-model * { vector-effect: non-scaling-stroke; }
+.profile-svg.on-model .axis { stroke: rgb(124 77 255 / 0.25); stroke-width: 1; }
+.profile-svg.on-model .unit { stroke: rgb(124 77 255 / 0.3); stroke-width: 1; }
+.profile-svg.on-model .outline { fill: rgb(124 77 255 / 0.12); stroke: #7c4dff; stroke-width: 2.5; pointer-events: stroke; }
+.profile-svg.on-model .point { fill: #fff; stroke: #7c4dff; stroke-width: 2; pointer-events: all; }
+.profile-svg.on-model .point.first { stroke-width: 3.5; }
+.profile-svg.on-model .point.active { fill: #7c4dff; stroke: #7c4dff; }
+.profile-svg.on-model .handle { fill: #12a39a; pointer-events: all; }
+.profile-svg.on-model .handle-line { stroke: #12a39a; stroke-width: 1.5; }
+.profile-svg.on-model .drawing { stroke: #7c4dff; stroke-width: 2; }
+.profile-svg.on-model .empty { display: none; }
+
+.contour-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: grid;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.95);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
+  font-size: 14px;
+}
+.contour-bar[hidden] { display: none; }
+.contour-bar.linked .contour-info { color: #b4401f; font-weight: 600; }
+.contour-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.contour-tools button { min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
+.contour-tools button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.contour-tools button:disabled { opacity: 0.45; cursor: default; }
+.contour-tools button[hidden] { display: none; }
+.contour-tools button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+body.contour-editing .empty-hint { display: none; }
+
+@media (max-width: 640px) {
+  body.contour-editing .panel { display: none; }
+  .contour-bar { left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none; padding: 6px 8px; font-size: 13px; }
+  .contour-tools button { min-height: 40px; padding: 0 8px; font-size: 13px; }
+}

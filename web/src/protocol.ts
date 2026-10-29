@@ -77,6 +77,11 @@ export interface StationView {
   profile: Profile;
   /** Omrisset rundt kurven i verdenskoordinater. */
   ring: Vec3[];
+  /** Konturens plan: sentrum, normal (kurvens tangent) og profilens x- og y-akse. */
+  origin: Vec3;
+  normal: Vec3;
+  x_axis: Vec3;
+  y_axis: Vec3;
 }
 
 export interface AnchorView {

@@ -94,6 +94,11 @@ export class SkeletonView {
     viewport.addToScene(this.bendLine);
   }
 
+  /** Skjuler hele skjelettet, for eksempel under konturredigering. */
+  setVisible(visible: boolean) {
+    this.group.visible = visible;
+  }
+
   get count() {
     return this.splines.length;
   }

@@ -36,10 +36,14 @@ type TipMode = 'pull' | 'plane' | 'bend';
 
 /** Hele formen flyttes ved å gripe kurven til en rotspline. */
 type CurvePick = { kind: 'curve'; spline: number; index: number; position: THREE.Vector3 };
+/** En kontur gripes og flyttes langs splinen sin. */
+type RingPick = { kind: 'ring'; spline: number; index: number; station: number; position: THREE.Vector3 };
+/** Konturene gripes nærmere enn punktene, så prikkene rundt dem kan brukes. */
+const RING_RADIUS_PX = { mouse: 6, touch: 14 };
 
 interface Drag {
   pointerId: number;
-  pick: SkeletonPick | CurvePick;
+  pick: SkeletonPick | CurvePick | RingPick;
   startMouse: THREE.Vector2;
   mouse: THREE.Vector2;
   moved: boolean;
@@ -112,11 +116,16 @@ export class SkeletonTool {
   }
 
   private onDown(e: PointerEvent) {
-    if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement) return;
+    if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement || this.viewport.interactionLocked) return;
     const touch = e.pointerType === 'touch';
     const px = touch ? PICK_RADIUS_PX.touch : PICK_RADIUS_PX.mouse;
-    let pick: SkeletonPick | CurvePick | null = this.view.pick(e.clientX, e.clientY, px);
+    let pick: SkeletonPick | CurvePick | RingPick | null = this.view.pick(e.clientX, e.clientY, px);
     const curvePx = touch ? CURVE_RADIUS_PX.touch : CURVE_RADIUS_PX.mouse;
+    if (!pick) {
+      const ring = this.view.pickRing(e.clientX, e.clientY, touch ? RING_RADIUS_PX.touch : RING_RADIUS_PX.mouse);
+      const st = ring && this.view.spline(ring.spline)?.profiles[ring.station];
+      if (ring && st) pick = { kind: 'ring', spline: ring.spline, index: -1, station: ring.station, position: v3(st.origin) };
+    }
     if (!pick && this.cb.tool() === 'bezier') {
       // Bézier: et trykk på kurven setter inn et punkt. Draget går til
       // kameraet, så et drag ved siden av et punkt flytter verken punkt eller form.
@@ -141,7 +150,11 @@ export class SkeletonTool {
     this.latest = this.view.splines;
     const mouse = new THREE.Vector2(e.clientX, e.clientY);
     const previous = this.view.selection;
-    this.view.select({ spline: pick.spline, index: pick.kind === 'curve' ? null : pick.index });
+    this.view.select(
+      pick.kind === 'ring'
+        ? { spline: pick.spline, index: null, station: pick.station }
+        : { spline: pick.spline, index: pick.kind === 'curve' ? null : pick.index },
+    );
     this.cb.selectionChanged();
     const drag: Drag = (this.drag = {
       pointerId: e.pointerId,
@@ -174,7 +187,7 @@ export class SkeletonTool {
 
   private bendFrom: number | null = null;
 
-  private isTip(pick: SkeletonPick | CurvePick) {
+  private isTip(pick: SkeletonPick | CurvePick | RingPick) {
     const s = this.spline(pick.spline);
     return pick.kind === 'anchor' && !!s && pick.index === s.anchors.length - 1;
   }
@@ -360,7 +373,12 @@ export class SkeletonTool {
   private edit(drag: Drag, all: boolean): SkeletonEdit {
     const { pick } = drag;
     let current: SkeletonEdit;
-    if (drag.bend) {
+    if (pick.kind === 'ring') {
+      // Konturen flyttes langs splinen til punktet nærmest pekeren.
+      const st = this.spline(pick.spline)!.profiles[pick.station];
+      const near = this.view.nearestOn(pick.spline, drag.mouse.x, drag.mouse.y);
+      current = { kind: 'setStation', spline: pick.spline, station: pick.station, at: near ? near.at : st.at, scale: st.scale, rotation: st.rotation };
+    } else if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       current = { kind: 'bend', spline: pick.spline, from: drag.bend.from, direction: arr(b.direction), angle: b.angle, radius: b.radius };
     } else if (pick.kind === 'curve') {
@@ -387,6 +405,7 @@ export class SkeletonTool {
 
   private describeMove(drag: Drag) {
     if (drag.pick.kind === 'curve') return 'Flytt hele formen';
+    if (drag.pick.kind === 'ring') return `Flytt kontur ${drag.pick.station + 1} langs splinen`;
     if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       const snap = drag.ctrl ? ' (snapper 15°)' : '';
@@ -440,10 +459,21 @@ export class SkeletonTool {
     if (!drag || e.pointerId !== drag.pointerId) return;
     this.end();
     if (!drag.moved) {
-      this.cb.status('Valgt punkt. Dra for å flytte, eller grip tuppen og hold Alt + Shift for å bøye herfra.');
+      this.cb.status(
+        drag.pick.kind === 'ring'
+          ? 'Valgt kontur. Dra den langs splinen, eller hold inne (høyreklikk) for «Rediger kontur».'
+          : 'Valgt punkt. Dra for å flytte, eller grip tuppen og hold Alt + Shift for å bøye herfra.',
+      );
       return;
     }
-    this.cb.commit(this.edit(drag, true), this.describe(drag).split(' · scroll')[0]);
+    const edit = this.edit(drag, true);
+    if (drag.pick.kind === 'ring' && edit.kind === 'setStation') {
+      // Konturene sorteres etter plass; valget følger konturen som ble flyttet.
+      const others = this.spline(drag.pick.spline)!.profiles.filter((_, i) => i !== (drag.pick as RingPick).station);
+      this.view.select({ spline: drag.pick.spline, index: null, station: others.filter((p) => p.at <= edit.at).length });
+      this.cb.selectionChanged();
+    }
+    this.cb.commit(edit, this.describe(drag).split(' · scroll')[0]);
   }
 
   cancel() {

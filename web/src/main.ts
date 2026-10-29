@@ -1,5 +1,6 @@
 import { AxisGizmo } from './axis-gizmo';
 import { ContextMenu, type MenuItem } from './context-menu';
+import { ContourMode } from './contour-mode';
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
 import type { Command, GeometryResult, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
@@ -36,6 +37,7 @@ const layerLocked = $<HTMLInputElement>('#layer-locked');
 const lockedInfo = $('#locked-info');
 const editSections = $<HTMLFieldSetElement>('#edit-sections');
 const branchSection = $('#branch-section');
+const editContour = $<HTMLButtonElement>('#edit-contour');
 const orientFollow = $<HTMLButtonElement>('#orient-follow');
 const orientKeep = $<HTMLButtonElement>('#orient-keep');
 const undoButton = $<HTMLButtonElement>('#undo');
@@ -149,6 +151,8 @@ function updateSkeletonPanel() {
   orientFollow.setAttribute('aria-pressed', String(spline?.orientation !== 'keep_direction'));
   orientKeep.setAttribute('aria-pressed', String(spline?.orientation === 'keep_direction'));
   profiles?.update();
+  contourMode?.update();
+  editContour.disabled = !(sel?.station != null && spline && !spline.locked);
   updateInspector();
   layers?.render();
   container.dataset.selection = !sel ? '' : sel.layer ? `layer:${sel.spline}` : sel.station != null ? `contour:${sel.spline}:${sel.station}` : `spline:${sel.spline}`;
@@ -231,6 +235,25 @@ async function previewSkeletonEdit(edit: SkeletonEdit) {
       skeletonPreviewInFlight = false;
     }
   }
+}
+
+const contourMode: ContourMode = new ContourMode(viewport, skeleton, container, {
+  preview: (edit) => previewSkeletonEdit(edit),
+  commit: (edit, what) => {
+    queuedSkeletonPreview = null;
+    editSkeleton(edit, what);
+  },
+  status: (text) => (status.textContent = text),
+  changed: (active) => {
+    container.dataset.contourMode = active ? 'on' : '';
+    document.body.classList.toggle('contour-editing', active);
+  },
+});
+
+/** «Rediger kontur»: konturredigering direkte på modellen. */
+function editContourAt(spline: number, station: number) {
+  setSelection({ spline, index: null, station });
+  contourMode.enter(spline, station);
 }
 
 const profiles: ProfilePanel = new ProfilePanel(skeleton, {
@@ -463,7 +486,12 @@ fileInput.addEventListener('change', async () => {
   if (file) await openProject(await file.text(), file.name);
 });
 
-const busy = () => tool.dragging || skeletonTool.dragging || gizmo.open;
+const busy = () => tool.dragging || skeletonTool.dragging || gizmo.open || contourMode.active;
+
+editContour.addEventListener('click', () => {
+  const sel = skeleton.selection;
+  if (sel?.station != null) editContourAt(sel.spline, sel.station);
+});
 const undo = () => !busy() && run({ kind: 'undo' }, () => 'Angret.');
 const redo = () => !busy() && run({ kind: 'redo' }, () => 'Gjort om.');
 undoButton.addEventListener('click', undo);
@@ -567,6 +595,7 @@ function installPressHandling() {
 
 /** Velger konturen, splinen eller laget under pekeren, eller fjerner valget. */
 function tapAt(x: number, y: number, touch: boolean) {
+  if (contourMode.active) return;
   const ring = skeleton.pickRing(x, y, touch ? 16 : 8);
   if (ring) return setSelection({ spline: ring.spline, index: null, station: ring.station });
   const curve = skeleton.pickCurve(x, y, touch ? 16 : 8);
@@ -632,7 +661,7 @@ function splineItems(s: SplineView, at: number): MenuItem[] {
     { label: 'Lim inn kontur her', action: () => profiles.pasteAt(s, at), disabled: !profiles.clip },
     ...(near >= 0
       ? [
-          { label: `Rediger kontur ${near + 1}`, action: () => select(s.id, null, near) },
+          { label: `Rediger kontur ${near + 1}`, action: () => editContourAt(s.id, near) },
           {
             label: 'Kopier konturen',
             action: () => {
@@ -652,7 +681,7 @@ const historyItems = (): MenuItem[] => [
 ];
 
 function openMenu(x: number, y: number) {
-  if (gizmo.open) return;
+  if (gizmo.open || contourMode.active) return;
   const pick = skeleton.pick(x, y, 12);
   if (pick?.kind === 'anchor') {
     const s = skeleton.spline(pick.spline)!;
@@ -674,6 +703,7 @@ function openMenu(x: number, y: number) {
     const s = skeleton.spline(ring.spline)!;
     select(s.id, null, ring.station);
     return menu.show(x, y, `Kontur ${ring.station + 1} på ${s.parent === null ? 'hovedsplinen' : splineName(s)}`, [
+      { label: 'Rediger kontur', action: () => editContourAt(s.id, ring.station) },
       { label: 'Kopier konturen', action: () => profiles.copyCurrent() },
       { label: 'Slett konturen', action: () => editSkeleton({ kind: 'removeProfile', spline: s.id, station: ring.station }, 'Slettet kontur') },
     ]);
@@ -744,6 +774,11 @@ declare global {
       splineCurvePoint(spline: number, fraction: number): { x: number; y: number } | null;
       /** Ankerpunktene i verdenskoordinater. */
       splineAnchorsWorld(spline: number): Vec3[] | null;
+      /** Plassen til konturene langs splinen (andel av buelengden). */
+      profileAts(spline: number): number[] | null;
+      /** Skjermposisjonen til punkt `i` i omrisset til en kontur. */
+      ringScreen(spline: number, station: number, i: number): { x: number; y: number } | null;
+      cameraPosition(): Vec3;
       /** Forelder, feste og orientering. */
       splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number } | null;
     };
@@ -790,6 +825,19 @@ window.creatureForgeTest = {
     const rect = viewport.renderer.domElement.getBoundingClientRect();
     const p = viewport.toScreen(new THREE.Vector3(...q));
     return { x: rect.left + p.x, y: rect.top + p.y };
+  },
+  profileAts(spline) {
+    return skeleton.spline(spline)?.profiles.map((p) => p.at) ?? null;
+  },
+  ringScreen(spline, station, i) {
+    const q = skeleton.spline(spline)?.profiles[station]?.ring[i];
+    if (!q) return null;
+    const rect = viewport.renderer.domElement.getBoundingClientRect();
+    const p = viewport.toScreen(new THREE.Vector3(...q));
+    return { x: rect.left + p.x, y: rect.top + p.y };
+  },
+  cameraPosition() {
+    return arr(viewport.camera.position);
   },
   splineInfo(spline) {
     const s = skeleton.spline(spline);

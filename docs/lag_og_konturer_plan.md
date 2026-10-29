@@ -38,7 +38,7 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 | 1 | Kartlegge og gjenskape feil | Gjort (dette dokumentet) |
 | 2 | Lagliste, objektvalg, skjul og lås, aksekors for ny spline, Bézier-innsetting, langtrykk, lagring og åpning, fjerne «Legg til kule» | Gjort, se under |
 | 3 | Orienteringsvalg for grener, «Ny gren» med retningshåndtak, flytting av festet gjennom spline-nettverket | Gjort, se under |
-| 4 | «Ny kontur» der brukeren trykker, flytting langs splinen, konturredigering på modellen | Ikke startet |
+| 4 | «Ny kontur» der brukeren trykker, flytting langs splinen, konturredigering på modellen | Gjort, se under |
 | 5 | Konturregister, presets (sirkel, ellipse, egg, trekant), volumpreset, masterkobling | Ikke startet |
 | 6 | Stabilisering før Surface Pen, Surface Brush og mirror | Ikke startet |
 
@@ -61,7 +61,15 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 - **Ny gren** (knappen, eller «Ny gren her» i hurtigmenyen) viser først et retningshåndtak i festepunktet, foreslått vinkelrett på forelderens tangent i nettopp det punktet (ikke i nærmeste ankerpunkt). Håndtaket kan dras fritt for retning og lengde, et trykk godtar forslaget, og aksene ±X, ±Y og ±Z kan velges direkte. Forelderens kurve og håndtak endres ikke.
 - **Flytting av festet.** Grenens første punkt dras langs forelderen. Nær et kryss (en gren festet til splinen, eller splinens eget feste) vises de andre splinene stiplet med en ring i krysset, og festet går over på den splinen pekeren er nærmest. Det gir en «vei gjennom veikrysset». Forelderkoblingen oppdateres i samme redigering (`Reattach` med `parent`), undergrenene følger med, og grenens punkter i festerammen beholdes: vinkelen mot den nye forelderen med «Følg forelder», verdensretningen med «Behold retning». Grenen selv og undergrenene dens er aldri mulige mål, og kjernen avviser feste til seg selv, til egne undergrener og sløyfer. Flyttingen er ett angresteg og lagres i prosjektfilen.
 
-## 5 Videre retning som ikke implementeres nå
+## 5 Trinn 4: konturplassering og konturredigering på modellen
+
+- **Plassering.** «Ny kontur her» i hurtigmenyen (høyreklikk eller langt trykk på kurven eller formen) lager konturen der det ble trykket. Konturen kan gripes på ringen og dras fram og tilbake langs splinen; valget følger konturen selv om rekkefølgen langs splinen endres. Et vanlig trykk på ringen velger konturen, men åpner ikke redigeringen.
+- **«Rediger kontur»** (hurtigmenyen på en kontur, eller knappen «Rediger kontur på modellen» i panelet) setter kameraet vinkelrett på konturplanet med profilens y-akse opp og zoomer inn. Modellen skjæres i konturplanet med et klippeplan, så tverrsnittet vises, og resten tegnes nedtonet og delvis gjennomsiktig. Omrisset redigeres i sitt eget plan oppå modellen: kjernen sender planets sentrum, normal og akser (`StationView::origin`, `normal`, `x_axis`, `y_axis`), og editoren legges nøyaktig over ringen i hvert bilde. Punkter og håndtak er større enn i panelet, så de kan brukes med finger og penn.
+- **Verktøy i modusen:** dra punkter og håndtak, «Sett inn punkt» (et trykk på omrisset setter inn et punkt; dobbeltklikk virker også), «Hjørnepunkt»/«Mykt punkt», «Slett punkt», «Tegn nytt» og «Ferdig». Konkave profiler som H redigeres som andre profiler. Geometrien forhåndsvises under drag og lagres som ett angresteg når punktet slippes.
+- **Kamera i modusen:** zoom og panorering virker, rotasjon er slått av så planet står vinkelrett. «Ferdig» eller Esc setter kameraet tilbake der det var. Skjelett, prikker og andre verktøy er inaktive så lenge modusen er åpen. På små skjermer skjules panelet, og verktøylinjen for konturen ligger nederst.
+- **Masterkobling:** en koblet kontur redigeres gjennom masteren, og verktøylinjen viser «endrer masteren Mn og N konturer» med «Gjør individuell» ved siden av. Registeret og presetene kommer i trinn 5.
+
+## 6 Videre retning som ikke implementeres nå
 
 ### Surface Pen og Surface Brush
 

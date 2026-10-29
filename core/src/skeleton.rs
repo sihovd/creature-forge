@@ -909,6 +909,12 @@ pub struct StationView {
     pub profile: Profile,
     /// Omrisset i verdenskoordinater, for tegning rundt kurven.
     pub ring: Vec<Vec3>,
+    /// Konturens plan: sentrum på kurven, tangenten (planets normal) og
+    /// aksene profilens x og y peker langs (med rotasjonen tatt med).
+    pub origin: Vec3,
+    pub normal: Vec3,
+    pub x_axis: Vec3,
+    pub y_axis: Vec3,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -977,6 +983,10 @@ impl Skeleton {
                             })
                             .collect();
                         Ok(StationView {
+                            origin: frame.origin,
+                            normal: frame.t,
+                            x_axis: frame.dir_to_world([cos, sin, 0.0]),
+                            y_axis: frame.dir_to_world([-sin, cos, 0.0]),
                             at: st.at,
                             scale: st.scale,
                             rotation: st.rotation,
