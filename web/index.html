@@ -16,8 +16,8 @@
       </div>
     </header>
     <div class="workspace">
-      <main id="viewport" class="viewport" data-shape-count="0" data-control-points="0" data-revision="0">
-        <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Legg til kule» for å begynne.</p>
+      <main id="viewport" class="viewport" data-shape-count="0" data-control-points="0" data-revision="0" data-splines="0">
+        <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Legg til kule» eller «Ny spline» for å begynne.</p>
       </main>
       <aside class="panel" aria-label="Egenskaper">
         <h2>Formgrep</h2>
@@ -35,6 +35,20 @@
           <span class="field"><input id="radius" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /> mm</span>
         </label>
         <label class="check"><input id="show-centerlines" type="checkbox" checked /> Vis senterlinjer</label>
+        <h2 class="section">Skjelett</h2>
+        <div class="row">
+          <button id="add-spline" type="button" title="Ny rotspline">Ny spline</button>
+          <button id="add-branch" type="button" title="Ny gren festet til valgt spline" disabled>Ny gren</button>
+        </div>
+        <div class="row">
+          <button id="anchor-kind" type="button" title="Bytt mellom mykt punkt og hjørnepunkt" disabled>Hjørnepunkt</button>
+          <button id="remove-spline" type="button" title="Slett valgt spline med grener" disabled>Slett</button>
+        </div>
+        <label>
+          Tykkelse
+          <span class="field"><input id="thickness" type="number" min="0.5" max="50" step="0.5" value="5" inputmode="decimal" /> mm</span>
+        </label>
+        <p class="help">Dra punkter og håndtak for å forme senterlinjen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Dobbeltklikk på kurven for å legge inn et punkt, for eksempel for å bøye videre etter 180°. Grenenes feste dras langs forelderen.</p>
         <p class="help">Hold over et punkt for å se retningen, og dra for å trekke ut eller presse inn. Hold Alt for å flytte i plan, eller Alt + Shift for å låse lengden og bøye. Dra i tuppen av en senterlinje for å endre bøyningen. Esc avbryter.</p>
       </aside>
     </div>

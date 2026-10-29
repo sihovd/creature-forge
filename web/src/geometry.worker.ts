@@ -33,11 +33,16 @@ function shapeUpdate(shape: number, spacingMm: number): ShapeUpdate {
   };
 }
 
-function documentResult(shapes: number[], spacingMm: number): GeometryResult {
+/** Formen 0 er skjelettet, som ikke har noen mesh ennå. */
+const SKELETON_SHAPE = 0;
+
+function documentResult(shapes: number[], spacingMm: number, created: number | null = null): GeometryResult {
   return {
     kind: 'document',
     state: { revision: doc.revision(), canUndo: doc.canUndo(), canRedo: doc.canRedo() },
-    shapes: shapes.map((s) => shapeUpdate(s, spacingMm)),
+    shapes: shapes.filter((s) => s !== SKELETON_SHAPE).map((s) => shapeUpdate(s, spacingMm)),
+    skeleton: JSON.parse(doc.skeletonView()),
+    created,
   };
 }
 
@@ -68,10 +73,17 @@ function run(req: GeometryRequest): GeometryResult {
     }
     case 'controlPoints':
       return documentResult(Array.from(doc.shapeIds()), req.spacingMm);
+    case 'previewSkeleton':
+      return { kind: 'skeletonPreview', skeleton: JSON.parse(doc.previewSkeleton(JSON.stringify(req.edit))) };
+    case 'commitSkeleton': {
+      const created = doc.commitSkeleton(JSON.stringify(req.edit));
+      return documentResult([], req.spacingMm, created || null);
+    }
   }
 }
 
 function transferables(result: GeometryResult): Transferable[] {
+  if (result.kind === 'skeletonPreview') return [];
   const meshes = result.kind === 'preview' ? [result.mesh] : result.shapes.flatMap((s) => (s.mesh ? [s.mesh] : []));
   const points =
     result.kind === 'document' ? result.shapes.flatMap((s) => [s.controlPoints.buffer, s.centerlines.buffer]) : [];

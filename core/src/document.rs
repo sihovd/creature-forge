@@ -9,10 +9,14 @@
 
 use crate::mesh::{length, normalize, sub, TriMesh, Vec3};
 use crate::pull::{apply_pull, Pull};
+use crate::skeleton::{Skeleton, SkeletonEdit, SplineId};
 use crate::sphere::icosphere_for_edge;
 use std::collections::HashMap;
 
 pub type ShapeId = u32;
+
+/// Spline-skjelettet er ett formlag med denne id-en i historikken.
+pub const SKELETON_SHAPE: ShapeId = 0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Operation {
@@ -31,6 +35,11 @@ pub enum Operation {
         target: usize,
         pull: Pull,
     },
+    /// Skjelettet etter en redigering. Hele tilstanden lagres, så angre
+    /// gjenoppretter forrige skjelett nøyaktig.
+    Skeleton {
+        skeleton: Skeleton,
+    },
 }
 
 impl Operation {
@@ -39,6 +48,7 @@ impl Operation {
             Operation::AddSphere { shape, .. }
             | Operation::Pull { shape, .. }
             | Operation::EditPull { shape, .. } => *shape,
+            Operation::Skeleton { .. } => SKELETON_SHAPE,
         }
     }
 }
@@ -50,6 +60,7 @@ pub struct Document {
     redo: Vec<Operation>,
     next_shape: ShapeId,
     meshes: HashMap<ShapeId, TriMesh>,
+    skeleton: Skeleton,
     revision: u64,
 }
 
@@ -67,6 +78,7 @@ impl Document {
             redo: Vec::new(),
             next_shape: 1,
             meshes: HashMap::new(),
+            skeleton: Skeleton::new(),
             revision: 0,
         }
     }
@@ -95,6 +107,25 @@ impl Document {
         let mut ids: Vec<_> = self.meshes.keys().copied().collect();
         ids.sort_unstable();
         ids
+    }
+
+    pub fn skeleton(&self) -> &Skeleton {
+        &self.skeleton
+    }
+
+    /// Skjelettet med en redigering som ikke er lagret ennå (forhåndsvisning under drag).
+    pub fn preview_skeleton(&self, edit: &SkeletonEdit) -> Result<Skeleton, String> {
+        let mut next = self.skeleton.clone();
+        next.apply(edit)?;
+        Ok(next)
+    }
+
+    /// Utfører en redigering av skjelettet som ett angresteg.
+    pub fn commit_skeleton(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
+        let mut next = self.skeleton.clone();
+        let created = next.apply(edit)?;
+        self.apply(Operation::Skeleton { skeleton: next })?;
+        Ok(created)
     }
 
     pub fn add_sphere(&mut self, center: Vec3, radius: f64) -> Result<ShapeId, String> {
@@ -179,6 +210,13 @@ impl Document {
 
     fn apply(&mut self, op: Operation) -> Result<(), String> {
         let shape = op.shape();
+        if let Operation::Skeleton { skeleton } = &op {
+            self.skeleton = skeleton.clone();
+            self.history.push(op);
+            self.redo.clear();
+            self.revision += 1;
+            return Ok(());
+        }
         let mesh = match &op {
             // En redigering endrer en tidligere operasjon, så formen beregnes fra starten.
             Operation::EditPull { target, pull, .. } => self
@@ -208,6 +246,7 @@ impl Document {
                 self.target_edge,
             ),
             Operation::EditPull { .. } => Err("En redigering beregnes via historikken".into()),
+            Operation::Skeleton { .. } => Err("Skjelettet har ingen mesh ennå".into()),
         }
     }
 
@@ -256,6 +295,18 @@ impl Document {
 
     /// Beregner en forms mesh på nytt fra operasjonene i historikken.
     fn rebuild(&mut self, shape: ShapeId) {
+        if shape == SKELETON_SHAPE {
+            self.skeleton = self
+                .history
+                .iter()
+                .rev()
+                .find_map(|op| match op {
+                    Operation::Skeleton { skeleton } => Some(skeleton.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(Skeleton::new);
+            return;
+        }
         // Operasjonene var gyldige da de ble lagt inn, og beregningen er deterministisk.
         match self.evaluate_shape(shape, None).ok().flatten() {
             Some(m) => self.meshes.insert(shape, m),
@@ -387,5 +438,54 @@ mod tests {
         doc.redo();
         assert_eq!(doc.centerlines(s), vec![(target, bent)]);
         assert!(doc.commit_edit(s, 0, bent).is_err());
+    }
+
+    #[test]
+    fn skjelettet_er_ett_formlag_med_angre() {
+        use crate::skeleton::SkeletonEdit as E;
+        let mut doc = Document::new(2.0);
+        let s = doc.add_sphere([0.0, 25.0, 0.0], 25.0).unwrap();
+        let root = doc
+            .commit_skeleton(&E::AddRoot {
+                start: [0.0; 3],
+                direction: [0.0, 1.0, 0.0],
+                length: 40.0,
+                thickness: 5.0,
+            })
+            .unwrap()
+            .unwrap();
+        let preview = doc
+            .preview_skeleton(&E::Extend {
+                spline: root,
+                delta: 10.0,
+            })
+            .unwrap();
+        // Forhåndsvisning endrer ikke dokumentet.
+        assert_eq!(doc.skeleton().ids(), vec![root]);
+        assert!((preview.world_spline(root).unwrap().length - 50.0).abs() < 1e-6);
+        let child = doc
+            .commit_skeleton(&E::AddChild {
+                parent: root,
+                at: 0.5,
+                direction: [1.0, 0.0, 0.0],
+                length: 20.0,
+                thickness: 3.0,
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc.skeleton().children(root), vec![child]);
+        // Angre fjerner grenen, men ikke kula eller roten.
+        assert_eq!(doc.undo(), Some(SKELETON_SHAPE));
+        assert_eq!(doc.skeleton().ids(), vec![root]);
+        assert!(doc.mesh(s).is_some());
+        doc.redo();
+        assert_eq!(doc.skeleton().ids(), vec![root, child]);
+        doc.undo();
+        doc.undo();
+        assert!(doc.skeleton().ids().is_empty());
+        // En ugyldig redigering lagres ikke.
+        let rev = doc.revision();
+        assert!(doc.commit_skeleton(&E::Remove { spline: 99 }).is_err());
+        assert_eq!(doc.revision(), rev);
     }
 }

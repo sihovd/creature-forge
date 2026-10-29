@@ -1,6 +1,9 @@
 import { GeometryClient } from './geometry-client';
-import type { Command, GeometryResult, PullParams } from './protocol';
+import * as THREE from 'three';
+import type { Command, GeometryResult, PullParams, SkeletonEdit, Vec3 } from './protocol';
 import { PullTool, type PanelMode } from './pull-tool';
+import { SkeletonTool } from './skeleton-tool';
+import { SkeletonView } from './skeleton-view';
 import { Viewport } from './viewport';
 
 const SPHERE_RADIUS_MM = 25;
@@ -16,10 +19,16 @@ const spacingInput = $<HTMLInputElement>('#spacing');
 const radiusInput = $<HTMLInputElement>('#radius');
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 const showCenterlines = $<HTMLInputElement>('#show-centerlines');
+const addSpline = $<HTMLButtonElement>('#add-spline');
+const addBranch = $<HTMLButtonElement>('#add-branch');
+const anchorKind = $<HTMLButtonElement>('#anchor-kind');
+const removeSpline = $<HTMLButtonElement>('#remove-spline');
+const thicknessInput = $<HTMLInputElement>('#thickness');
 
 // Arbeidsrommet starter alltid tomt; brukeren legger selv til første form.
 const viewport = new Viewport(container);
 const geometry = new GeometryClient();
+const skeleton = new SkeletonView(viewport);
 const fmt = (n: number) => n.toLocaleString('nb-NO');
 
 function readMm(input: HTMLInputElement, fallback: number) {
@@ -32,6 +41,14 @@ function apply(result: GeometryResult) {
     viewport.setShapeMesh(result.shape, result.mesh);
     return;
   }
+  if (result.kind === 'skeletonPreview') {
+    skeleton.set(result.skeleton);
+    return;
+  }
+  skeleton.set(result.skeleton);
+  if (result.created !== null) skeleton.select({ spline: result.created, index: null });
+  updateSkeletonPanel();
+  container.dataset.splines = String(skeleton.count);
   let triangles = 0;
   for (const s of result.shapes) {
     triangles += viewport.setShapeMesh(s.shape, s.mesh);
@@ -44,7 +61,7 @@ function apply(result: GeometryResult) {
   container.dataset.controlPoints = String(viewport.controlPointCount);
   container.dataset.centerlines = String(viewport.centerlineCount);
   container.dataset.revision = String(result.state.revision);
-  hint.hidden = viewport.shapeCount > 0;
+  hint.hidden = viewport.shapeCount > 0 || skeleton.count > 0;
   return triangles;
 }
 
@@ -89,6 +106,83 @@ for (const b of modeButtons) {
 }
 showCenterlines.addEventListener('change', () => viewport.setCenterlinesVisible(showCenterlines.checked));
 
+function updateSkeletonPanel() {
+  const sel = skeleton.selection;
+  const spline = sel ? skeleton.spline(sel.spline) : null;
+  const anchor = spline && sel!.index !== null ? spline.anchors[sel!.index] : null;
+  addBranch.disabled = !spline;
+  removeSpline.disabled = !spline;
+  anchorKind.disabled = !anchor;
+  anchorKind.textContent = anchor?.kind === 'corner' ? 'Mykt punkt' : 'Hjørnepunkt';
+  if (spline) thicknessInput.value = String(spline.thickness);
+}
+
+function editSkeleton(edit: SkeletonEdit, what: string) {
+  run({ kind: 'commitSkeleton', edit }, (_t, ms) => `${what} · ${ms.toFixed(0)} ms`);
+}
+
+// Registreres før formgrepet, så skjelettet får pekeren først.
+const skeletonTool = new SkeletonTool(viewport, skeleton, {
+  preview: async (edit) => {
+    const { result } = await geometry.send({ kind: 'previewSkeleton', edit });
+    return result.kind === 'skeletonPreview' ? result.skeleton : null;
+  },
+  commit: (edit, what) => editSkeleton(edit, what),
+  restore: () => run({ kind: 'controlPoints', spacingMm: geometry.spacingMm }, () => status.textContent ?? ''),
+  status: (text) => (status.textContent = text),
+  selectionChanged: updateSkeletonPanel,
+});
+
+const arr = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
+
+addSpline.addEventListener('click', () => {
+  // Nye rotspliner står loddrett og legges ved siden av hverandre.
+  const roots = skeleton.splines.filter((s) => s.parent === null).length;
+  editSkeleton(
+    { kind: 'addRoot', start: [roots * 30, 0, 0], direction: [0, 1, 0], length: 40, thickness: readMm(thicknessInput, 5) },
+    'Ny spline',
+  );
+});
+
+addBranch.addEventListener('click', () => {
+  const sel = skeleton.selection;
+  const parent = sel && skeleton.spline(sel.spline);
+  if (!parent) return;
+  // Grenen festes i valgt punkt, ellers midt på, og peker mot høyre i bildet.
+  const anchor = sel.index !== null && sel.index > 0 ? parent.anchors[sel.index] : null;
+  const at = anchor ? anchor.at : 0.5;
+  const tangent = new THREE.Vector3(...(anchor ?? parent.anchors[0]).tangent);
+  const dir = viewport.projector.cameraRight.clone().projectOnPlane(tangent);
+  if (dir.lengthSq() < 1e-6) dir.copy(viewport.projector.cameraUp).projectOnPlane(tangent);
+  editSkeleton(
+    { kind: 'addChild', parent: parent.id, at, direction: arr(dir.normalize()), length: 20, thickness: readMm(thicknessInput, 5) * 0.6 },
+    'Ny gren',
+  );
+});
+
+anchorKind.addEventListener('click', () => {
+  const sel = skeleton.selection;
+  const spline = sel && skeleton.spline(sel.spline);
+  if (!spline || sel.index === null) return;
+  const next = spline.anchors[sel.index].kind === 'corner' ? 'smooth' : 'corner';
+  editSkeleton(
+    { kind: 'setKind', spline: spline.id, index: sel.index, anchor_kind: next },
+    next === 'corner' ? 'Hjørnepunkt' : 'Mykt punkt',
+  );
+});
+
+removeSpline.addEventListener('click', () => {
+  const sel = skeleton.selection;
+  if (sel) editSkeleton({ kind: 'remove', spline: sel.spline }, 'Slettet spline med grener');
+});
+
+thicknessInput.addEventListener('change', () => {
+  const thickness = readMm(thicknessInput, 5);
+  thicknessInput.value = String(thickness);
+  const sel = skeleton.selection;
+  if (sel) editSkeleton({ kind: 'setThickness', spline: sel.spline, thickness }, `Tykkelse ${thickness} mm`);
+});
+
 const tool = new PullTool(viewport, {
   radiusMm: () => readMm(radiusInput, 12),
   panelMode: () => panelMode,
@@ -121,8 +215,10 @@ const tool = new PullTool(viewport, {
 });
 
 addSphere.disabled = true;
+addSpline.disabled = true;
 geometry.ready.then((version) => {
   addSphere.disabled = false;
+  addSpline.disabled = false;
   status.textContent = `Geometrikjerne klar (beregningsversjon ${version}).`;
 });
 
@@ -132,8 +228,9 @@ addSphere.addEventListener('click', () =>
   ),
 );
 
-const undo = () => !tool.dragging && run({ kind: 'undo' }, () => 'Angret.');
-const redo = () => !tool.dragging && run({ kind: 'redo' }, () => 'Gjort om.');
+const busy = () => tool.dragging || skeletonTool.dragging;
+const undo = () => !busy() && run({ kind: 'undo' }, () => 'Angret.');
+const redo = () => !busy() && run({ kind: 'redo' }, () => 'Gjort om.');
 undoButton.addEventListener('click', undo);
 redoButton.addEventListener('click', redo);
 
@@ -169,6 +266,8 @@ declare global {
     creatureForgeTest?: {
       gripNearCenter(): { x: number; y: number } | null;
       firstCenterlineTip(): { x: number; y: number } | null;
+      splineAnchor(spline: number, index: number): { x: number; y: number } | null;
+      splineLength(spline: number): number | null;
     };
   }
 }
@@ -181,6 +280,17 @@ window.creatureForgeTest = {
     if (!p) return null;
     const s = viewport.toScreen(p.position);
     return { x: rect.left + s.x, y: rect.top + s.y };
+  },
+  splineAnchor(spline, index) {
+    const s = skeleton.spline(spline);
+    const a = s?.anchors.at(index);
+    if (!a) return null;
+    const rect = viewport.renderer.domElement.getBoundingClientRect();
+    const p = viewport.toScreen(new THREE.Vector3(...a.position));
+    return { x: rect.left + p.x, y: rect.top + p.y };
+  },
+  splineLength(spline) {
+    return skeleton.spline(spline)?.length ?? null;
   },
   firstCenterlineTip() {
     const rect = viewport.renderer.domElement.getBoundingClientRect();

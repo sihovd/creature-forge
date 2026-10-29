@@ -13,7 +13,51 @@ export type Command =
   | { kind: 'commitEdit'; shape: number; target: number; pull: PullParams }
   | { kind: 'undo' }
   | { kind: 'redo' }
-  | { kind: 'controlPoints'; spacingMm: number };
+  | { kind: 'controlPoints'; spacingMm: number }
+  | { kind: 'previewSkeleton'; edit: SkeletonEdit }
+  | { kind: 'commitSkeleton'; edit: SkeletonEdit };
+
+export type Vec3 = [number, number, number];
+
+/** Redigeringer av spline-skjelettet. Speiler `SkeletonEdit` i kjernen. */
+export type SkeletonEdit =
+  | { kind: 'addRoot'; start: Vec3; direction: Vec3; length: number; thickness: number }
+  | { kind: 'addChild'; parent: number; at: number; direction: Vec3; length: number; thickness: number }
+  | { kind: 'moveAnchor'; spline: number; index: number; position: Vec3 }
+  | { kind: 'moveTip'; spline: number; position: Vec3 }
+  | { kind: 'setHandle'; spline: number; index: number; side: 'in' | 'out'; position: Vec3 }
+  | { kind: 'setKind'; spline: number; index: number; anchor_kind: AnchorKind }
+  | { kind: 'insertAnchor'; spline: number; at: number }
+  | { kind: 'extend'; spline: number; delta: number }
+  | { kind: 'bend'; spline: number; from: number; direction: Vec3; angle: number; radius: number }
+  | { kind: 'reattach'; spline: number; at: number }
+  | { kind: 'setThickness'; spline: number; thickness: number }
+  | { kind: 'remove'; spline: number }
+  | { kind: 'batch'; edits: SkeletonEdit[] };
+
+export type AnchorKind = 'smooth' | 'corner';
+
+export interface AnchorView {
+  position: Vec3;
+  /** Håndtakenes endepunkter. */
+  handle_in: Vec3;
+  handle_out: Vec3;
+  kind: AnchorKind;
+  /** Andel av buelengden der punktet ligger. */
+  at: number;
+  tangent: Vec3;
+}
+
+/** En spline i skjelettet, i verdenskoordinater. */
+export interface SplineView {
+  id: number;
+  parent: number | null;
+  at: number;
+  thickness: number;
+  length: number;
+  points: Vec3[];
+  anchors: AnchorView[];
+}
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };
 
@@ -46,8 +90,9 @@ export interface DocumentState {
 }
 
 export type GeometryResult =
-  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[] }
-  | { kind: 'preview'; shape: number; mesh: MeshResult };
+  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; created: number | null }
+  | { kind: 'preview'; shape: number; mesh: MeshResult }
+  | { kind: 'skeletonPreview'; skeleton: SplineView[] };
 
 export type GeometryResponse =
   | { kind: 'ready'; geometryVersion: number }

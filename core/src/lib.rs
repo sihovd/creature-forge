@@ -15,6 +15,7 @@ pub mod sphere;
 
 use document::{control_points, Document};
 use pull::Pull;
+use skeleton::SkeletonEdit;
 use wasm_bindgen::prelude::*;
 
 /// Beregnet trekantmesh slik den sendes til visningen.
@@ -70,7 +71,7 @@ pub fn create_sphere(radius_mm: f64, target_edge_mm: f64) -> Result<MeshBuffers,
 /// Versjonen av geometriberegningene. Lagres i prosjektfiler (kap. 19).
 #[wasm_bindgen(js_name = geometryVersion)]
 pub fn geometry_version() -> u32 {
-    2
+    3
 }
 
 /// Dokumentet slik grensesnittet ser det gjennom workeren.
@@ -185,7 +186,34 @@ impl JsDocument {
         out
     }
 
-    /// Angrer siste operasjon og returnerer formen som ble endret.
+    /// Skjelettet som JSON for visningen (se `skeleton::SplineView`).
+    #[wasm_bindgen(js_name = skeletonView)]
+    pub fn skeleton_view(&self) -> Result<String, JsError> {
+        view_json(self.0.skeleton())
+    }
+
+    /// Visningen av skjelettet med en redigering som ikke lagres.
+    #[wasm_bindgen(js_name = previewSkeleton)]
+    pub fn preview_skeleton(&self, edit_json: &str) -> Result<String, JsError> {
+        let skeleton = self
+            .0
+            .preview_skeleton(&read_edit(edit_json)?)
+            .map_err(|e| JsError::new(&e))?;
+        view_json(&skeleton)
+    }
+
+    /// Utfører en redigering av skjelettet som ett angresteg. Returnerer id-en
+    /// til en ny spline, eller 0.
+    #[wasm_bindgen(js_name = commitSkeleton)]
+    pub fn commit_skeleton(&mut self, edit_json: &str) -> Result<u32, JsError> {
+        self.0
+            .commit_skeleton(&read_edit(edit_json)?)
+            .map(|id| id.unwrap_or(0))
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Angrer siste operasjon og returnerer formen som ble endret
+    /// (0 er skjelettet).
     pub fn undo(&mut self) -> Option<u32> {
         self.0.undo()
     }
@@ -193,6 +221,15 @@ impl JsDocument {
     pub fn redo(&mut self) -> Option<u32> {
         self.0.redo()
     }
+}
+
+fn read_edit(json: &str) -> Result<SkeletonEdit, JsError> {
+    serde_json::from_str(json).map_err(|e| JsError::new(&format!("Ugyldig redigering: {e}")))
+}
+
+fn view_json(skeleton: &skeleton::Skeleton) -> Result<String, JsError> {
+    let view = skeleton.view().map_err(|e| JsError::new(&e))?;
+    serde_json::to_string(&view).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Grepet sendes som [ax, ay, az, nx, ny, nz, bx, by, bz, radius]:

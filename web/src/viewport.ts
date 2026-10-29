@@ -86,6 +86,11 @@ export class Viewport {
     });
   }
 
+  /** Legger til et objekt i scenen (brukes av skjelettvisningen). */
+  addToScene(obj: THREE.Object3D) {
+    this.scene.add(obj);
+  }
+
   get shapeCount() {
     return this.shapes.size;
   }
