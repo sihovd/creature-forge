@@ -73,7 +73,7 @@ pub fn create_sphere(radius_mm: f64, target_edge_mm: f64) -> Result<MeshBuffers,
 /// Versjonen av geometriberegningene. Lagres i prosjektfiler (kap. 19).
 #[wasm_bindgen(js_name = geometryVersion)]
 pub fn geometry_version() -> u32 {
-    5
+    6
 }
 
 /// Dokumentet slik grensesnittet ser det gjennom workeren.
@@ -86,6 +86,19 @@ impl JsDocument {
     #[wasm_bindgen(constructor)]
     pub fn new(target_edge_mm: f64) -> JsDocument {
         JsDocument(Document::new(target_edge_mm), Vec::new())
+    }
+
+    /// Åpner en prosjektfil (.cfproj) i et nytt dokument.
+    #[wasm_bindgen(js_name = openProject)]
+    pub fn open_project(text: &str, target_edge_mm: f64) -> Result<JsDocument, JsError> {
+        let doc = Document::open_project(text, target_edge_mm).map_err(|e| JsError::new(&e))?;
+        Ok(JsDocument(doc, Vec::new()))
+    }
+
+    /// Prosjektfilen som JSON.
+    #[wasm_bindgen(js_name = toProject)]
+    pub fn to_project(&self) -> String {
+        self.0.to_project_json()
     }
 
     pub fn revision(&self) -> f64 {

@@ -23,7 +23,12 @@ export interface SkeletonToolCallbacks {
   restore: () => void;
   status: (text: string) => void;
   selectionChanged: () => void;
+  /** Aktivt verktøy: «Velg» eller «Bézier» (trykk på kurven setter inn et punkt). */
+  tool: () => 'select' | 'bezier';
 }
+
+/** Et trykk regnes som trykk og ikke drag når pekeren flyttes mindre enn dette. */
+const TAP_PX = 5;
 
 type TipMode = 'pull' | 'plane' | 'bend';
 
@@ -69,6 +74,10 @@ export class SkeletonTool {
   private latest: SplineView[] = [];
   private inFlight = false;
   private queued: SkeletonEdit | null = null;
+  /** Et trykk på kurven med Bézier-verktøyet som setter inn et punkt når pekeren slippes. */
+  private insert: { pointerId: number; x: number; y: number; spline: number; at: number } | null = null;
+  /** Pekeren som sist startet et drag i skjelettet, så andre trykkhandlinger kan hoppe over den. */
+  handledPointer: number | null = null;
 
   constructor(
     private viewport: Viewport,
@@ -83,6 +92,10 @@ export class SkeletonTool {
     el.addEventListener('pointercancel', (e) => this.drag?.pointerId === e.pointerId && this.cancel());
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     el.parentElement!.addEventListener('wheel', (e) => this.onWheel(e), { capture: true, passive: false });
+    window.addEventListener('pointermove', (e) => {
+      if (this.insert?.pointerId === e.pointerId && Math.hypot(e.clientX - this.insert.x, e.clientY - this.insert.y) > TAP_PX) this.insert = null;
+    });
+    window.addEventListener('pointerup', (e) => this.onInsertUp(e));
     window.addEventListener('keydown', (e) => this.onKey(e));
     window.addEventListener('keyup', (e) => this.onKey(e));
   }
@@ -96,8 +109,16 @@ export class SkeletonTool {
     const touch = e.pointerType === 'touch';
     const px = touch ? PICK_RADIUS_PX.touch : PICK_RADIUS_PX.mouse;
     let pick: SkeletonPick | CurvePick | null = this.view.pick(e.clientX, e.clientY, px);
+    const curvePx = touch ? CURVE_RADIUS_PX.touch : CURVE_RADIUS_PX.mouse;
+    if (!pick && this.cb.tool() === 'bezier') {
+      // Bézier: et trykk på kurven setter inn et punkt. Draget går til
+      // kameraet, så et drag ved siden av et punkt flytter verken punkt eller form.
+      const near = this.view.pickCurve(e.clientX, e.clientY, curvePx);
+      this.insert = near ? { pointerId: e.pointerId, x: e.clientX, y: e.clientY, spline: near.spline, at: near.at } : null;
+      return;
+    }
     if (!pick) {
-      const near = this.view.pickCurve(e.clientX, e.clientY, touch ? CURVE_RADIUS_PX.touch : CURVE_RADIUS_PX.mouse);
+      const near = this.view.pickCurve(e.clientX, e.clientY, curvePx);
       if (near && this.view.spline(near.spline)?.parent === null) {
         pick = { kind: 'curve', spline: near.spline, index: -1, position: near.position };
       }
@@ -105,6 +126,7 @@ export class SkeletonTool {
     if (!pick) return;
     // Skjelettet ligger oppå formene og har forrang foran formgrep og kamera.
     e.stopImmediatePropagation();
+    this.handledPointer = e.pointerId;
     this.viewport.controls.enabled = false;
     // Kontrollpunktene gjelder meshen før draget og skjules til den er beregnet på nytt.
     this.viewport.setControlPointsVisible(false);
@@ -363,6 +385,16 @@ export class SkeletonTool {
     this.viewport.setControlPointsVisible(true);
     const el = this.viewport.renderer.domElement;
     if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
+  }
+
+  private onInsertUp(e: PointerEvent) {
+    const ins = this.insert;
+    if (!ins || ins.pointerId !== e.pointerId) return;
+    this.insert = null;
+    this.handledPointer = e.pointerId;
+    this.view.select({ spline: ins.spline, index: null });
+    this.cb.selectionChanged();
+    this.cb.commit({ kind: 'insertAnchor', spline: ins.spline, at: ins.at }, 'Satte inn et ankerpunkt');
   }
 
   private onDoubleClick(e: MouseEvent) {

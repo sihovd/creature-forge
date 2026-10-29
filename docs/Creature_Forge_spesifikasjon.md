@@ -14,6 +14,8 @@ Det anbefalte tekniske fundamentet er en dokumentmodell med varige formoperasjon
 
 **Krav K** er avklart med Sivert i denne samtalen. **Bakgrunn B** er hentet fra overleveringspakken fra 23. oktober og videreføres som tidligere produktretning der den ikke motsies av nyere avklaringer. **Forslag F** er presise anbefalinger i denne spesifikasjonen, ikke brukerbeslutninger. **Verifikasjon V** betyr at oppførselen eller ytelsen må dokumenteres ved implementasjon og tester. Kapittel 22 samler åpne beslutninger.
 
+Nyere avklaringer: [planen for spline-skjelettet](spline_skjelett_plan.md) (28.–29. oktober 2026) og [lag, grenfester og konturredigering](lag_og_konturer_plan.md) (29. oktober 2026) har forrang foran dette dokumentet der de er uenige. Der heter overflateverktøyene Surface Pen og Surface Brush.
+
 Krav beskriver tiltenkt ferdig program. Dokumentet hevder ikke at funksjonene er implementert. Forskningsresultater og biblioteker dokumenterer byggesteiner; de beviser ikke at Creature Forge allerede har en fungerende helhet.
 
 ## 1 Formål og produktgrenser
@@ -50,7 +52,7 @@ Et øye kan være i gruppen «Hode», følge både hodet og en kinnform som unde
 
 **F.** En sammenhengende økt skal fungere slik:
 
-1. Appen og et nytt prosjekt starter med et tomt arbeidsrom. Velg dimensjoner i millimeter og legg til en kule med et tydelig valg, for eksempel «Legg til kule».
+1. Appen og et nytt prosjekt starter med et tomt arbeidsrom. Velg dimensjoner i millimeter og legg til første form med «Ny spline», der uttrekksretningen velges i et aksekors (Sivert 29. oktober 2026: knappen «Legg til kule» er fjernet; alle former bygges rundt spliner, se [lag og konturer](lag_og_konturer_plan.md)).
 2. Dra i et kontrollpunkt eller marker et meshområde og trekk det ut.
 3. Bøy uttrekkingen med Alt eller Alt + Shift. Slipp musen og rediger videre med den varige senterlinjen.
 4. Legg til et lag. Tegn et lukket omriss på den nåværende overflaten.

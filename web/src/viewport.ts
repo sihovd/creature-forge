@@ -20,6 +20,11 @@ export class Viewport {
   private scene = new THREE.Scene();
   private shapes = new Map<number, THREE.Mesh>();
   private material = new THREE.MeshStandardMaterial({ color: 0xd9c7a8, roughness: 0.65 });
+  /** Låste lag tegnes litt nedtonet. */
+  private lockedMaterial = new THREE.MeshStandardMaterial({ color: 0xc9c4bb, roughness: 0.8, transparent: true, opacity: 0.75 });
+  /** Skjulte og låste lag (kroppen har samme id som rotsplinen). */
+  private hiddenShapes = new Set<number>();
+  private lockedShapes = new Set<number>();
   private points = new Map<number, ControlPoint[]>();
   private pointMarkers = new THREE.Group();
   private pointGeometry = new THREE.SphereGeometry(0.55, 10, 8);
@@ -27,6 +32,7 @@ export class Viewport {
   private arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 10, ACTIVE_COLOR, 3, 2);
   private influence: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
+  private frameCallbacks: (() => void)[] = [];
   constructor(private container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -57,8 +63,14 @@ export class Viewport {
     this.resize();
     this.renderer.setAnimationLoop(() => {
       this.controls.update();
+      for (const f of this.frameCallbacks) f();
       this.renderer.render(this.scene, this.camera);
     });
+  }
+
+  /** Kalles før hvert bilde tegnes, for eksempel for å plassere merkelapper. */
+  onFrame(f: () => void) {
+    this.frameCallbacks.push(f);
   }
 
   /** Legger til et objekt i scenen (brukes av skjelettvisningen). */
@@ -89,7 +101,8 @@ export class Viewport {
     geometry.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
     geometry.setIndex(new THREE.BufferAttribute(result.indices, 1));
     geometry.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geometry, this.material);
+    const mesh = new THREE.Mesh(geometry, this.lockedShapes.has(shape) ? this.lockedMaterial : this.material);
+    mesh.visible = !this.hiddenShapes.has(shape);
     mesh.userData.shape = shape;
     this.shapes.set(shape, mesh);
     this.scene.add(mesh);
@@ -110,6 +123,29 @@ export class Viewport {
     this.rebuildPointMarkers();
   }
 
+  /**
+   * Skjulte lag vises ikke og kan ikke treffes. Låste lag vises, men treffes
+   * ikke av pekeren og har ingen kontrollpunkter, så klikk går gjennom dem.
+   */
+  setShapeStates(hidden: Set<number>, locked: Set<number>) {
+    this.hiddenShapes = hidden;
+    this.lockedShapes = locked;
+    for (const [id, mesh] of this.shapes) {
+      mesh.visible = !hidden.has(id);
+      mesh.material = locked.has(id) ? this.lockedMaterial : this.material;
+    }
+    this.rebuildPointMarkers();
+  }
+
+  private active(shape: number) {
+    return !this.hiddenShapes.has(shape) && !this.lockedShapes.has(shape);
+  }
+
+  /** Formene pekeren kan treffe. */
+  private pickable() {
+    return [...this.shapes].filter(([id]) => this.active(id)).map(([, m]) => m);
+  }
+
   setControlPointsVisible(visible: boolean) {
     this.pointMarkers.visible = visible;
   }
@@ -128,7 +164,7 @@ export class Viewport {
 
   private rebuildPointMarkers() {
     this.pointMarkers.clear();
-    const all = [...this.points.values()].flat();
+    const all = [...this.points].filter(([id]) => this.active(id)).flatMap(([, pts]) => pts);
     if (!all.length) return;
     const inst = new THREE.InstancedMesh(this.pointGeometry, this.pointMaterial, all.length);
     const m = new THREE.Matrix4();
@@ -174,7 +210,8 @@ export class Viewport {
     const toCamera = new THREE.Vector3();
     let best: ControlPoint | null = null;
     let bestDist = maxPx;
-    for (const pts of this.points.values()) {
+    for (const [shape, pts] of this.points) {
+      if (!this.active(shape)) continue;
       for (const p of pts) {
         toCamera.subVectors(this.camera.position, p.position);
         if (toCamera.dot(p.normal) <= 0) continue;
@@ -192,14 +229,15 @@ export class Viewport {
     const dir = p.clone().sub(this.camera.position);
     const dist = dir.length();
     this.raycaster.set(this.camera.position, dir.normalize());
-    const hit = this.raycaster.intersectObjects([...this.shapes.values()], false)[0];
+    const visible = [...this.shapes.values()].filter((m) => m.visible);
+    const hit = this.raycaster.intersectObjects(visible, false)[0];
     return !!hit && hit.distance < dist - 0.5;
   }
 
   /** Formen og punktet under pekeren, eller null. */
   raycast(clientX: number, clientY: number): { shape: number; point: THREE.Vector3 } | null {
     this.setRay(clientX, clientY);
-    const hit = this.raycaster.intersectObjects([...this.shapes.values()], false)[0];
+    const hit = this.raycaster.intersectObjects(this.pickable(), false)[0];
     return hit ? { shape: hit.object.userData.shape as number, point: hit.point } : null;
   }
 

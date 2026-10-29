@@ -83,6 +83,16 @@ pub struct Spline {
     /// Flat ende med hele endeprofilen i stedet for en avrundet ende.
     #[serde(default)]
     pub flat_end: bool,
+    /// Navnet brukeren har gitt splinen. For en rotspline er det lagets navn.
+    /// Tomt: visningen lager et navn.
+    #[serde(default)]
+    pub name: String,
+    /// Laget er skjult. Gjelder bare rotspliner, og dermed hele laget.
+    #[serde(default)]
+    pub hidden: bool,
+    /// Laget er låst mot redigering. Gjelder bare rotspliner.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// Ortonormal ramme: tangent T og tverretningene U og V.
@@ -547,6 +557,18 @@ pub enum SkeletonEdit {
         spline: SplineId,
         flat: bool,
     },
+    /// Nytt navn på en spline. For en rotspline er det lagets navn.
+    Rename {
+        spline: SplineId,
+        name: String,
+    },
+    /// Skjuler eller låser laget med rotsplinen `spline`. Tillatt også når
+    /// laget er låst, så det kan låses opp.
+    SetLayer {
+        spline: SplineId,
+        hidden: bool,
+        locked: bool,
+    },
     Batch {
         edits: Vec<SkeletonEdit>,
     },
@@ -589,6 +611,7 @@ impl Skeleton {
 
     fn apply_inner(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
         use SkeletonEdit as E;
+        self.check_unlocked(edit)?;
         match *edit {
             E::AddRoot {
                 start,
@@ -782,6 +805,28 @@ impl Skeleton {
                 self.masters.insert(master, profile.clone());
             }
             E::SetFlatEnd { spline, flat } => self.update(spline, |s| s.flat_end = flat)?,
+            E::Rename { spline, ref name } => {
+                let name = name.trim().to_string();
+                self.update(spline, |s| s.name = name)?
+            }
+            E::SetLayer {
+                spline,
+                hidden,
+                locked,
+            } => {
+                if self
+                    .spline(spline)
+                    .ok_or("Splinen finnes ikke")?
+                    .attachment
+                    .is_some()
+                {
+                    return Err("Bare et helt lag kan skjules eller låses".into());
+                }
+                self.update(spline, |s| {
+                    s.hidden = hidden;
+                    s.locked = locked;
+                })?
+            }
             E::Batch { ref edits } => {
                 let mut created = None;
                 for e in edits {
@@ -807,6 +852,12 @@ pub struct SplineView {
     pub anchors: Vec<AnchorView>,
     pub profiles: Vec<StationView>,
     pub flat_end: bool,
+    pub name: String,
+    /// Rotsplinen i laget splinen hører til.
+    pub layer: SplineId,
+    /// Laget er skjult eller låst (arves fra rotsplinen).
+    pub hidden: bool,
+    pub locked: bool,
 }
 
 /// En profilstasjon slik visningen og profileditoren trenger den.
@@ -900,7 +951,13 @@ impl Skeleton {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
+                let root = self.root_of(*id).unwrap_or(*id);
+                let layer = &self.splines[&root];
                 Ok(SplineView {
+                    name: spline.name.clone(),
+                    layer: root,
+                    hidden: layer.hidden,
+                    locked: layer.locked,
                     id: *id,
                     parent: spline.attachment.map(|a| a.parent),
                     at: spline.attachment.map_or(0.0, |a| a.at),
@@ -986,6 +1043,9 @@ impl Skeleton {
             thickness,
             profiles: Vec::new(),
             flat_end: false,
+            name: String::new(),
+            hidden: false,
+            locked: false,
         };
         self.insert(spline)
     }
@@ -1008,6 +1068,9 @@ impl Skeleton {
             thickness,
             profiles: Vec::new(),
             flat_end: false,
+            name: String::new(),
+            hidden: false,
+            locked: false,
         };
         self.insert(spline)
     }
@@ -1223,6 +1286,67 @@ impl Skeleton {
             .collect()
     }
 
+    /// Rotsplinen i laget som `id` hører til.
+    pub fn root_of(&self, id: SplineId) -> Option<SplineId> {
+        let mut cur = id;
+        for _ in 0..=self.splines.len() {
+            match self.splines.get(&cur)?.attachment {
+                Some(a) => cur = a.parent,
+                None => return Some(cur),
+            }
+        }
+        None
+    }
+
+    /// Laget til `id` er låst.
+    pub fn is_locked(&self, id: SplineId) -> bool {
+        self.root_of(id)
+            .and_then(|r| self.splines.get(&r))
+            .is_some_and(|s| s.locked)
+    }
+
+    /// Avviser redigeringer av et låst lag. Navn, skjuling og låsing er
+    /// tillatt, så laget kan låses opp igjen.
+    fn check_unlocked(&self, edit: &SkeletonEdit) -> Result<(), String> {
+        use SkeletonEdit as E;
+        let target = match *edit {
+            E::AddRoot { .. } | E::Batch { .. } | E::Rename { .. } | E::SetLayer { .. } => None,
+            E::AddChild { parent, .. } => Some(parent),
+            E::MoveAnchor { spline, .. }
+            | E::MoveTip { spline, .. }
+            | E::SetHandle { spline, .. }
+            | E::SetKind { spline, .. }
+            | E::InsertAnchor { spline, .. }
+            | E::Extend { spline, .. }
+            | E::Bend { spline, .. }
+            | E::Reattach { spline, .. }
+            | E::Translate { spline, .. }
+            | E::SetThickness { spline, .. }
+            | E::Remove { spline }
+            | E::AddProfile { spline, .. }
+            | E::SetProfile { spline, .. }
+            | E::SetStation { spline, .. }
+            | E::RemoveProfile { spline, .. }
+            | E::MakeMaster { spline, .. }
+            | E::LinkMaster { spline, .. }
+            | E::Unlink { spline, .. }
+            | E::SetFlatEnd { spline, .. } => Some(spline),
+            E::SetMaster { master, .. } => {
+                // En master endrer alle koblede konturer, også i andre lag.
+                let linked = self.splines.iter().find(|(_, s)| {
+                    s.profiles
+                        .iter()
+                        .any(|st| st.shape == ProfileShape::Master { master })
+                });
+                linked.map(|(id, _)| *id).filter(|id| self.is_locked(*id))
+            }
+        };
+        match target {
+            Some(id) if self.is_locked(id) => Err("Laget er låst".into()),
+            _ => Ok(()),
+        }
+    }
+
     pub fn masters(&self) -> &BTreeMap<MasterId, Profile> {
         &self.masters
     }
@@ -1258,6 +1382,11 @@ impl Skeleton {
             }
             if s.profiles.windows(2).any(|w| w[0].at > w[1].at) {
                 return Err(format!("Profilene i spline {id} er ikke sortert"));
+            }
+            if s.attachment.is_some() && (s.hidden || s.locked) {
+                return Err(format!(
+                    "Spline {id} er en gren; bare lag kan skjules eller låses"
+                ));
             }
             if let Some(a) = s.attachment {
                 if !self.splines.contains_key(&a.parent) {

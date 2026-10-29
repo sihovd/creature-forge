@@ -1,21 +1,40 @@
+import { AxisGizmo } from './axis-gizmo';
 import { ContextMenu, type MenuItem } from './context-menu';
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
 import type { Command, GeometryResult, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
+import { LayerPanel, splineName } from './layer-panel';
 import { ProfilePanel } from './profile-panel';
 import { PullTool } from './pull-tool';
 import { polylineFraction } from './skeleton-math';
 import { SkeletonTool } from './skeleton-tool';
-import { SkeletonView } from './skeleton-view';
+import { SkeletonView, type Selection } from './skeleton-view';
 import { Viewport } from './viewport';
 
-const SPHERE_RADIUS_MM = 25;
+/** Lengden på en ny spline, i mm. */
+const NEW_SPLINE_MM = 40;
+/** Langt trykk med finger eller penn åpner hurtigmenyen. */
+const LONG_PRESS_MS = 550;
+const TAP_PX = 6;
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const container = $('#viewport');
 const status = $('#status');
 const hint = $('#empty-hint');
-const addSphere = $<HTMLButtonElement>('#add-sphere');
+const openButton = $<HTMLButtonElement>('#open-project');
+const saveButton = $<HTMLButtonElement>('#save-project');
+const fileInput = $<HTMLInputElement>('#project-file');
+const toolSelect = $<HTMLButtonElement>('#tool-select');
+const toolBezier = $<HTMLButtonElement>('#tool-bezier');
+const toggleLayers = $<HTMLButtonElement>('#toggle-layers');
+const inspectorTitle = $('#inspector-title');
+const inspectorPath = $('#inspector-path');
+const objectSection = $('#object-section');
+const objectName = $<HTMLInputElement>('#object-name');
+const layerHidden = $<HTMLInputElement>('#layer-hidden');
+const layerLocked = $<HTMLInputElement>('#layer-locked');
+const lockedInfo = $('#locked-info');
+const editSections = $<HTMLFieldSetElement>('#edit-sections');
 const undoButton = $<HTMLButtonElement>('#undo');
 const redoButton = $<HTMLButtonElement>('#redo');
 const spacingInput = $<HTMLInputElement>('#spacing');
@@ -30,6 +49,9 @@ const thicknessInput = $<HTMLInputElement>('#thickness');
 const viewport = new Viewport(container);
 const geometry = new GeometryClient();
 const skeleton = new SkeletonView(viewport);
+const gizmo = new AxisGizmo(viewport, container);
+let activeTool: 'select' | 'bezier' = 'select';
+const narrow = window.matchMedia('(max-width: 640px)');
 const fmt = (n: number) => n.toLocaleString('nb-NO');
 
 function readMm(input: HTMLInputElement, fallback: number) {
@@ -38,6 +60,7 @@ function readMm(input: HTMLInputElement, fallback: number) {
 }
 
 function apply(result: GeometryResult) {
+  if (result.kind === 'project') return;
   if (result.kind === 'preview') {
     viewport.setShapeMesh(result.shape, result.mesh);
     return;
@@ -49,6 +72,7 @@ function apply(result: GeometryResult) {
   }
   skeleton.set(result.skeleton);
   if (result.created !== null) skeleton.select({ spline: result.created, index: null });
+  syncLayers();
   updateSkeletonPanel();
   container.dataset.profiles = String(skeleton.splines.reduce((n, s) => n + s.profiles.length, 0));
   container.dataset.splines = String(skeleton.count);
@@ -99,21 +123,73 @@ async function pumpPreview() {
 }
 
 
+/** Skjulte og låste lag i visningen, og laglisten. */
+function syncLayers() {
+  const roots = skeleton.splines.filter((s) => s.parent === null);
+  viewport.setShapeStates(new Set(roots.filter((r) => r.hidden).map((r) => r.id)), new Set(roots.filter((r) => r.locked).map((r) => r.id)));
+  container.dataset.layers = String(roots.length);
+  container.dataset.hiddenLayers = String(roots.filter((r) => r.hidden).length);
+  container.dataset.lockedLayers = String(roots.filter((r) => r.locked).length);
+}
+
 function updateSkeletonPanel() {
   const sel = skeleton.selection;
   const spline = sel ? skeleton.spline(sel.spline) : null;
   const anchor = spline && sel!.index !== null ? spline.anchors[sel!.index] : null;
   addBranch.disabled = !spline;
   removeSpline.disabled = !spline;
+  removeSpline.textContent = sel?.layer ? 'Slett laget' : 'Slett';
   anchorKind.disabled = !anchor;
   anchorKind.textContent = anchor?.kind === 'corner' ? 'Mykt punkt' : 'Hjørnepunkt';
   if (spline) thicknessInput.value = String(spline.thickness);
   profiles?.update();
+  updateInspector();
+  layers?.render();
+  container.dataset.selection = !sel ? '' : sel.layer ? `layer:${sel.spline}` : sel.station != null ? `contour:${sel.spline}:${sel.station}` : `spline:${sel.spline}`;
+}
+
+/** Overskriften i inspektøren: hva som er valgt, og hvor det ligger i laget. */
+function updateInspector() {
+  const sel = skeleton.selection;
+  const s = sel ? skeleton.spline(sel.spline) : null;
+  objectSection.hidden = !s;
+  editSections.disabled = !!s?.locked;
+  lockedInfo.hidden = !s?.locked;
+  if (!s || !sel) {
+    inspectorTitle.textContent = 'Ingenting valgt';
+    inspectorPath.textContent = 'Velg et lag, en spline eller en kontur i listen eller i arbeidsflaten.';
+    return;
+  }
+  const layer = skeleton.spline(s.layer)!;
+  const chain: string[] = [];
+  for (let p = s.parent !== null ? skeleton.spline(s.parent) : null; p; p = p.parent !== null ? skeleton.spline(p.parent) : null) {
+    if (p.parent !== null) chain.unshift(splineName(p));
+  }
+  if (sel.layer) {
+    inspectorTitle.textContent = splineName(layer);
+    inspectorPath.textContent = 'Lag';
+  } else if (sel.station != null) {
+    inspectorTitle.textContent = `Kontur ${sel.station + 1}`;
+    inspectorPath.textContent = [splineName(layer), ...chain, s.parent === null ? 'Hovedspline' : splineName(s)].join(' / ');
+  } else {
+    inspectorTitle.textContent = s.parent === null ? 'Hovedspline' : splineName(s);
+    inspectorPath.textContent = [splineName(layer), ...chain].join(' / ');
+  }
+  // Navnet gjelder laget når hele laget eller hovedsplinen er valgt.
+  const named = sel.layer || s.parent === null ? layer : s;
+  if (document.activeElement !== objectName) objectName.value = named.name;
+  objectName.placeholder = splineName(named);
+  objectName.dataset.spline = String(named.id);
+  layerHidden.checked = layer.hidden;
+  layerLocked.checked = layer.locked;
 }
 
 function editSkeleton(edit: SkeletonEdit, what: string) {
   run({ kind: 'commitSkeleton', edit }, (_t, ms) => `${what} · ${ms.toFixed(0)} ms`);
 }
+
+// Trykk og langt trykk registreres før verktøyene, så de ser alle trykk.
+installPressHandling();
 
 // Registreres før formgrepet, så skjelettet får pekeren først.
 const skeletonTool = new SkeletonTool(viewport, skeleton, {
@@ -125,6 +201,7 @@ const skeletonTool = new SkeletonTool(viewport, skeleton, {
   restore: () => run({ kind: 'controlPoints', spacingMm: geometry.spacingMm }, () => status.textContent ?? ''),
   status: (text) => (status.textContent = text),
   selectionChanged: updateSkeletonPanel,
+  tool: () => activeTool,
 });
 
 const arr = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
@@ -159,14 +236,83 @@ const profiles: ProfilePanel = new ProfilePanel(skeleton, {
   status: (text) => (status.textContent = text),
 });
 
-addSpline.addEventListener('click', () => {
-  // Nye rotspliner står loddrett og legges ved siden av hverandre.
-  const roots = skeleton.splines.filter((s) => s.parent === null).length;
-  editSkeleton(
-    { kind: 'addRoot', start: [roots * 30, 0, 0], direction: [0, 1, 0], length: 40, thickness: readMm(thicknessInput, 5) },
-    'Ny spline',
-  );
+const layers: LayerPanel = new LayerPanel($('#layer-list'), skeleton, {
+  select: (selection) => {
+    setSelection(selection);
+    // På små skjermer ligger listen over arbeidsflaten og lukkes etter valget.
+    if (narrow.matches && toggleLayers.getAttribute('aria-expanded') === 'true') toggleLayers.click();
+  },
+  rename: (spline, name) => renameSpline(spline, name),
+  setLayer: (root, hidden, locked) => setLayer(root, hidden, locked),
 });
+
+function setSelection(selection: Selection | null) {
+  skeleton.select(selection);
+  updateSkeletonPanel();
+}
+
+function setLayer(root: number, hidden: boolean, locked: boolean) {
+  const r = skeleton.spline(root);
+  if (!r) return;
+  const what = hidden !== r.hidden ? (hidden ? 'Skjulte laget' : 'Viste laget') : locked ? 'Låste laget' : 'Låste opp laget';
+  editSkeleton({ kind: 'setLayer', spline: root, hidden, locked }, `${what} ${splineName(r)}`);
+}
+
+objectName.addEventListener('change', () => {
+  const id = Number(objectName.dataset.spline);
+  if (skeleton.spline(id)) renameSpline(id, objectName.value);
+});
+objectName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') objectName.blur();
+});
+function renameSpline(id: number, name: string) {
+  editSkeleton({ kind: 'rename', spline: id, name }, name.trim() ? `Nytt navn: ${name.trim()}` : 'Navnet er fjernet');
+}
+for (const box of [layerHidden, layerLocked]) {
+  box.addEventListener('change', () => {
+    const s = skeleton.selection && skeleton.spline(skeleton.selection.spline);
+    if (s) setLayer(s.layer, layerHidden.checked, layerLocked.checked);
+  });
+}
+
+/**
+ * Ny spline: aksekorset vises i `origin`, og brukeren velger
+ * uttrekksretningen før splinen lages. Splinen velges med tuppen, så den
+ * kan trekkes videre ut.
+ */
+function newSplineAt(origin: THREE.Vector3) {
+  status.textContent = 'Velg uttrekksretning i aksekorset (X, Y eller Z). Esc avbryter.';
+  gizmo.show(origin, (direction) =>
+    editSkeleton(
+      { kind: 'addRoot', start: arr(origin), direction, length: NEW_SPLINE_MM, thickness: readMm(thicknessInput, 5) },
+      'Ny spline · dra tuppen for å trekke videre ut',
+    ),
+  );
+}
+
+addSpline.addEventListener('click', () => {
+  const rect = container.getBoundingClientRect();
+  const ground = viewport.groundPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  newSplineAt(ground ?? new THREE.Vector3());
+});
+
+function setTool(next: 'select' | 'bezier') {
+  activeTool = next;
+  toolSelect.setAttribute('aria-pressed', String(next === 'select'));
+  toolBezier.setAttribute('aria-pressed', String(next === 'bezier'));
+  container.dataset.tool = next;
+  status.textContent = next === 'bezier' ? 'Bézier: trykk på en kurve for å sette inn et ankerpunkt. Punkter og håndtak dras som før.' : 'Velg: trykk for å velge, dra punkter og håndtak.';
+}
+toolSelect.addEventListener('click', () => setTool('select'));
+toolBezier.addEventListener('click', () => setTool('bezier'));
+
+toggleLayers.addEventListener('click', () => {
+  const open = toggleLayers.getAttribute('aria-expanded') !== 'true';
+  toggleLayers.setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('layers-closed', !open);
+});
+// Laglisten er lukket på små skjermer til brukeren åpner den.
+if (narrow.matches) toggleLayers.click();
 
 /** Ny gren fra andelen `at` av `parent`, mot `toward` eller mot høyre i bildet. */
 function addBranchAt(parent: SplineView, at: number, toward?: THREE.Vector3) {
@@ -203,7 +349,7 @@ anchorKind.addEventListener('click', () => {
 
 removeSpline.addEventListener('click', () => {
   const sel = skeleton.selection;
-  if (sel) editSkeleton({ kind: 'remove', spline: sel.spline }, 'Slettet spline med grener');
+  if (sel) editSkeleton({ kind: 'remove', spline: sel.spline }, sel.layer ? 'Slettet laget' : 'Slettet spline med grener');
 });
 
 thicknessInput.addEventListener('change', () => {
@@ -234,21 +380,51 @@ const tool = new PullTool(viewport, {
   status: (text) => (status.textContent = text),
 });
 
-addSphere.disabled = true;
 addSpline.disabled = true;
+openButton.disabled = true;
 geometry.ready.then((version) => {
-  addSphere.disabled = false;
   addSpline.disabled = false;
+  openButton.disabled = false;
+  saveButton.disabled = false;
   status.textContent = `Geometrikjerne klar (beregningsversjon ${version}).`;
 });
 
-addSphere.addEventListener('click', () =>
-  run({ kind: 'addSphere', center: [0, SPHERE_RADIUS_MM, 0], radiusMm: SPHERE_RADIUS_MM }, (t, ms) =>
-    `Kule ${SPHERE_RADIUS_MM * 2} mm: ${fmt(t)} trekanter, beregnet på ${ms.toFixed(1)} ms.`,
-  ),
-);
+/** Lagrer prosjektet som en .cfproj-fil (JSON). */
+async function saveProject() {
+  if (saveButton.disabled) return;
+  try {
+    const { result } = await geometry.send({ kind: 'saveProject' });
+    if (result.kind !== 'project') return;
+    const blob = new Blob([result.text], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'skapning.cfproj';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    container.dataset.saved = result.text;
+    status.textContent = 'Prosjektet er lagret som skapning.cfproj.';
+  } catch (err) {
+    status.textContent = `Kunne ikke lagre: ${(err as Error).message}`;
+  }
+}
 
-const busy = () => tool.dragging || skeletonTool.dragging;
+/** Åpner en prosjektfil. Historikken starter på nytt fra filen. */
+async function openProject(text: string, name: string) {
+  skeleton.select(null);
+  await run({ kind: 'openProject', text }, () => `Åpnet ${name}.`);
+}
+
+saveButton.addEventListener('click', saveProject);
+openButton.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files?.[0];
+  fileInput.value = '';
+  if (file) await openProject(await file.text(), file.name);
+});
+
+const busy = () => tool.dragging || skeletonTool.dragging || gizmo.open;
 const undo = () => !busy() && run({ kind: 'undo' }, () => 'Angret.');
 const redo = () => !busy() && run({ kind: 'redo' }, () => 'Gjort om.');
 undoButton.addEventListener('click', undo);
@@ -266,6 +442,12 @@ window.addEventListener('keydown', (e) => {
   } else if (mod && key === 'y') {
     e.preventDefault();
     redo();
+  } else if (mod && key === 's') {
+    e.preventDefault();
+    saveProject();
+  } else if (mod && key === 'o') {
+    e.preventDefault();
+    if (!openButton.disabled) fileInput.click();
   }
 });
 
@@ -294,10 +476,77 @@ window.addEventListener('pointermove', (e) => {
 });
 container.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  if (busy() || rightDown?.moved) return;
+  // Langt trykk med finger eller penn håndteres selv, så menyen ikke åpnes to ganger.
+  if (busy() || rightDown?.moved || !rightDown) return;
   rightDown = null;
   openMenu(e.clientX, e.clientY);
 });
+
+// Trykk og langt trykk i arbeidsflaten. Et trykk velger det som ligger under
+// pekeren (kontur, spline eller lag); et langt trykk med finger eller penn
+// åpner samme hurtigmeny som høyreklikk med mus.
+function installPressHandling() {
+  let press: { id: number; x: number; y: number; moved: boolean; long: boolean; timer: number } | null = null;
+  container.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target !== viewport.renderer.domElement) return;
+    skeletonTool.handledPointer = null;
+    if (press) clearTimeout(press.timer);
+    press = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, long: false, timer: 0 };
+    if (e.pointerType !== 'mouse') {
+      const p = press;
+      p.timer = window.setTimeout(() => {
+        if (p.moved || press !== p) return;
+        p.long = true;
+        // Draget som startet med trykket, avbrytes uten endring.
+        skeletonTool.cancel();
+        tool.cancel();
+        openMenu(p.x, p.y);
+      }, LONG_PRESS_MS);
+    }
+  }, { capture: true });
+  window.addEventListener('pointermove', (e) => {
+    if (press?.id === e.pointerId && Math.hypot(e.clientX - press.x, e.clientY - press.y) > TAP_PX) {
+      press.moved = true;
+      clearTimeout(press.timer);
+    }
+  });
+  window.addEventListener('pointerup', (e) => {
+    const p = press;
+    if (!p || p.id !== e.pointerId) return;
+    press = null;
+    clearTimeout(p.timer);
+    if (p.moved || p.long || skeletonTool.handledPointer === e.pointerId || gizmo.open) return;
+    tapAt(e.clientX, e.clientY, e.pointerType === 'touch');
+  });
+  window.addEventListener('pointercancel', (e) => {
+    if (press?.id === e.pointerId) {
+      clearTimeout(press.timer);
+      press = null;
+    }
+  });
+}
+
+/** Velger konturen, splinen eller laget under pekeren, eller fjerner valget. */
+function tapAt(x: number, y: number, touch: boolean) {
+  const ring = skeleton.pickRing(x, y, touch ? 16 : 8);
+  if (ring) return setSelection({ spline: ring.spline, index: null, station: ring.station });
+  const curve = skeleton.pickCurve(x, y, touch ? 16 : 8);
+  if (curve) return setSelection({ spline: curve.spline, index: null, station: null });
+  const hit = viewport.raycast(x, y);
+  const s = hit && skeleton.spline(hit.shape);
+  if (s) return setSelection({ spline: s.layer, index: null, station: null, layer: true });
+  setSelection(null);
+}
+
+/** Et låst lag under pekeren (låste lag treffes ikke ellers). */
+function lockedLayerAt(x: number, y: number) {
+  const roots = skeleton.splines.filter((s) => s.parent === null && s.locked && !s.hidden);
+  if (!roots.length) return null;
+  viewport.setShapeStates(new Set(skeleton.splines.filter((s) => s.parent === null && s.hidden).map((s) => s.id)), new Set());
+  const hit = viewport.raycast(x, y);
+  syncLayers();
+  return hit ? (roots.find((r) => r.id === hit.shape) ?? null) : null;
+}
 
 /** Splinen nærmest et punkt i scenen blant `ids`, med andel av buelengden. */
 function nearestSpline(p: THREE.Vector3, ids?: Set<number>) {
@@ -364,6 +613,7 @@ const historyItems = (): MenuItem[] => [
 ];
 
 function openMenu(x: number, y: number) {
+  if (gizmo.open) return;
   const pick = skeleton.pick(x, y, 12);
   if (pick?.kind === 'anchor') {
     const s = skeleton.spline(pick.spline)!;
@@ -380,6 +630,15 @@ function openMenu(x: number, y: number) {
       { label: 'Slett spline med grener', action: () => editSkeleton({ kind: 'remove', spline: s.id }, 'Slettet spline med grener') },
     ]);
   }
+  const ring = skeleton.pickRing(x, y, 8);
+  if (ring) {
+    const s = skeleton.spline(ring.spline)!;
+    select(s.id, null, ring.station);
+    return menu.show(x, y, `Kontur ${ring.station + 1} på ${s.parent === null ? 'hovedsplinen' : splineName(s)}`, [
+      { label: 'Kopier konturen', action: () => profiles.copyCurrent() },
+      { label: 'Slett konturen', action: () => editSkeleton({ kind: 'removeProfile', spline: s.id, station: ring.station }, 'Slettet kontur') },
+    ]);
+  }
   const curve = skeleton.pickCurve(x, y, 10);
   if (curve) {
     const s = skeleton.spline(curve.spline)!;
@@ -392,13 +651,22 @@ function openMenu(x: number, y: number) {
     ]);
   }
   const hit = viewport.raycast(x, y);
+  const lockedHit = !hit && lockedLayerAt(x, y);
+  if (lockedHit) {
+    return menu.show(x, y, `${splineName(lockedHit)} (låst)`, [
+      { label: 'Lås opp laget', action: () => setLayer(lockedHit.id, lockedHit.hidden, false) },
+      { label: 'Skjul laget', action: () => setLayer(lockedHit.id, true, lockedHit.locked) },
+    ]);
+  }
   if (hit) {
     const near = nearestSpline(hit.point, bodyOf(hit.shape));
     if (near) {
       const s = near.spline;
       select(s.id);
       const out = hit.point.clone().sub(near.point);
-      return menu.show(x, y, 'Formen', [
+      const layer = skeleton.spline(s.layer)!;
+      return menu.show(x, y, splineName(layer), [
+        { label: 'Velg hele laget', action: () => setSelection({ spline: layer.id, index: null, station: null, layer: true }) },
         { label: 'Ny gren ut herfra', action: () => addBranchAt(s, near.at, out) },
         { label: 'Ny kontur her', action: () => profiles.addAt(s, near.at) },
         { label: 'Lim inn kontur her', action: () => profiles.pasteAt(s, near.at), disabled: !profiles.clip },
@@ -406,24 +674,18 @@ function openMenu(x: number, y: number) {
         null,
         ...historyItems(),
         null,
-        { label: 'Slett formen', action: () => editSkeleton({ kind: 'remove', spline: hit.shape }, 'Slettet formen') },
+        { label: 'Skjul laget', action: () => setLayer(layer.id, true, layer.locked) },
+        { label: 'Lås laget', action: () => setLayer(layer.id, layer.hidden, true) },
+        { label: 'Slett laget', action: () => editSkeleton({ kind: 'remove', spline: hit.shape }, 'Slettet laget') },
       ]);
     }
   }
   const ground = viewport.groundPoint(x, y);
   menu.show(x, y, 'Arbeidsrommet', [
     {
-      label: 'Legg til kule her',
-      disabled: addSphere.disabled || !ground,
-      action: () =>
-        run({ kind: 'addSphere', center: [ground!.x, SPHERE_RADIUS_MM, ground!.z], radiusMm: SPHERE_RADIUS_MM }, (t, ms) =>
-          `Kule ${SPHERE_RADIUS_MM * 2} mm: ${fmt(t)} trekanter, beregnet på ${ms.toFixed(1)} ms.`,
-        ),
-    },
-    {
       label: 'Ny spline her',
       disabled: addSpline.disabled || !ground,
-      action: () => editSkeleton({ kind: 'addRoot', start: [ground!.x, 0, ground!.z], direction: [0, 1, 0], length: 40, thickness: readMm(thicknessInput, 5) }, 'Ny spline'),
+      action: () => newSplineAt(ground!),
     },
     null,
     ...historyItems(),
@@ -448,13 +710,26 @@ declare global {
 }
 window.creatureForgeTest = {
   gripNearCenter() {
+    // Kontrollpunktet nærmest midten som ikke ligger oppå skjelettet (det har forrang).
     const rect = viewport.renderer.domElement.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const p = viewport.pickControlPoint(cx, cy, Math.max(rect.width, rect.height));
-    if (!p) return null;
-    const s = viewport.toScreen(p.position);
-    return { x: rect.left + s.x, y: rect.top + s.y };
+    let best: { x: number; y: number; d: number } | null = null;
+    for (let r = 0; r < Math.max(rect.width, rect.height) / 2; r += 8) {
+      for (let a = 0; a < 16; a++) {
+        const x = cx + r * Math.cos((a / 16) * 2 * Math.PI);
+        const y = cy + r * Math.sin((a / 16) * 2 * Math.PI);
+        const p = viewport.pickControlPoint(x, y, 6);
+        if (!p) continue;
+        const s = viewport.toScreen(p.position);
+        const q = { x: rect.left + s.x, y: rect.top + s.y };
+        if (skeleton.pick(q.x, q.y, 20) || skeleton.pickCurve(q.x, q.y, 12)) continue;
+        const d = Math.hypot(q.x - cx, q.y - cy);
+        if (!best || d < best.d) best = { ...q, d };
+      }
+      if (best) return { x: best.x, y: best.y };
+    }
+    return null;
   },
   splineAnchor(spline, index) {
     const s = skeleton.spline(spline);

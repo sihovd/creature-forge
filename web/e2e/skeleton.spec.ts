@@ -1,14 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-
-const viewport = (page: Page) => page.locator('#viewport');
-const status = (page: Page) => page.locator('#status');
+import { newSpline, status, viewport } from './helpers';
 
 async function addSpline(page: Page) {
   await page.goto('/');
-  const button = page.getByRole('button', { name: 'Ny spline' });
-  await expect(button).toBeEnabled();
-  await button.click();
-  await expect(viewport(page)).toHaveAttribute('data-splines', '1');
+  await newSpline(page);
 }
 
 const anchor = async (page: Page, spline: number, index: number) => {

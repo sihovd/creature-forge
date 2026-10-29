@@ -4,10 +4,11 @@ import { polylineFraction } from './skeleton-math';
 import type { Viewport } from './viewport';
 
 const LINE_COLOR = 0x3b5ba5;
-const SELECTED_COLOR = 0xd2652d;
+const SELECTED_COLOR = 0x7c4dff;
 const HANDLE_COLOR = 0x7a7f73;
-const RING_COLOR = 0x6f8fd6;
+const RING_COLOR = 0x1fa39b;
 const SNAP_COLOR = 0x1f9d55;
+const LOCKED_COLOR = 0x9a9e95;
 
 /** Noe i skjelettet som kan gripes. */
 export type SkeletonPick =
@@ -20,7 +21,12 @@ export interface Selection {
   index: number | null;
   /** Valgt tverrsnittsprofil (kontur), eller null. */
   station?: number | null;
+  /** Hele laget er valgt; `spline` er da rotsplinen. */
+  layer?: boolean;
 }
+
+/** Festet til en gren ligger på forelderens kurve og gripes bare når ingen andre punkter er like nær. */
+const ATTACH_PENALTY_PX = 6;
 
 /** Et punkt en spline-ende kan snappe til. */
 export interface SnapTarget {
@@ -52,6 +58,7 @@ export class SkeletonView {
     handle: new THREE.MeshBasicMaterial({ color: HANDLE_COLOR, depthTest: false }),
     handleLine: new THREE.LineBasicMaterial({ color: HANDLE_COLOR, depthTest: false }),
     ring: new THREE.LineBasicMaterial({ color: RING_COLOR, depthTest: false, transparent: true, opacity: 0.8 }),
+    locked: new THREE.LineBasicMaterial({ color: LOCKED_COLOR, depthTest: false, transparent: true, opacity: 0.6 }),
     selectedRing: new THREE.LineBasicMaterial({ color: SELECTED_COLOR, depthTest: false }),
   };
   private snapMarker: THREE.Mesh;
@@ -89,6 +96,18 @@ export class SkeletonView {
     return this.splines.find((s) => s.id === id) ?? null;
   }
 
+  /** Splinene pekeren kan treffe: ikke i skjulte eller låste lag. */
+  private get active() {
+    return this.splines.filter((s) => !s.hidden && !s.locked);
+  }
+
+  /** Splinen er valgt, alene eller som del av et valgt lag. */
+  isSelected(s: SplineView) {
+    const sel = this.selection;
+    if (!sel) return false;
+    return sel.layer ? s.layer === sel.spline : sel.spline === s.id;
+  }
+
   set(splines: SplineView[]) {
     this.splines = splines;
     if (this.selection && !this.spline(this.selection.spline)) this.selection = null;
@@ -116,8 +135,18 @@ export class SkeletonView {
       this.group.add(obj);
     };
     for (const s of this.splines) {
-      const selected = this.selection?.spline === s.id;
-      add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(s.points.map(v3)), selected ? this.materials.selectedLine : this.materials.line));
+      if (s.hidden) continue;
+      const curve = new THREE.BufferGeometry().setFromPoints(s.points.map(v3));
+      if (s.locked) {
+        // Et låst lag vises som referanse uten punkter som kan gripes.
+        add(new THREE.Line(curve, this.materials.locked));
+        for (const st of s.profiles) add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(st.ring.map(v3)), this.materials.locked));
+        continue;
+      }
+      const inLayer = this.isSelected(s);
+      // Punkter og håndtak vises bare for én valgt spline, ikke for et helt lag.
+      const selected = inLayer && !this.selection!.layer;
+      add(new THREE.Line(curve, inLayer ? this.materials.selectedLine : this.materials.line));
       // Konturene (tverrsnittene) tegnes som ringer rundt kurven.
       s.profiles.forEach((st, i) => {
         const ring = new THREE.LineLoop(
@@ -134,7 +163,8 @@ export class SkeletonView {
         if (i === s.anchors.length - 1) marker.scale.setScalar(1.4);
         if (i === 0 && s.parent !== null) marker.scale.setScalar(0.7);
         add(marker);
-        if (!selected) return;
+        // Håndtakene vises for valgt ankerpunkt, som i Illustrator, så de ikke dekker kurven.
+        if (!active) return;
         for (const h of [a.handle_in, a.handle_out]) {
           const end = v3(h);
           if (end.distanceTo(marker.position) < 1e-6) continue;
@@ -154,17 +184,18 @@ export class SkeletonView {
     let bestDist = maxPx;
     // Ved lik avstand vinner det siste punktet, så tuppen på en kort spline
     // (som i en kule) kan gripes selv om den ligger oppå roten.
-    const consider = (pick: SkeletonPick) => {
-      const d = this.viewport.toScreen(pick.position).distanceTo(mouse);
+    const consider = (pick: SkeletonPick, penalty = 0) => {
+      const d = this.viewport.toScreen(pick.position).distanceTo(mouse) + penalty;
       if (d <= bestDist) {
         best = pick;
         bestDist = d;
       }
     };
-    for (const s of this.splines) {
+    for (const s of this.active) {
       s.anchors.forEach((a, index) => {
-        consider({ kind: 'anchor', spline: s.id, index, position: v3(a.position) });
-        if (this.selection?.spline !== s.id) return;
+        const attach = index === 0 && s.parent !== null;
+        consider({ kind: 'anchor', spline: s.id, index, position: v3(a.position) }, attach ? ATTACH_PENALTY_PX : 0);
+        if (this.selection?.spline !== s.id || this.selection.layer || this.selection.index !== index) return;
         for (const side of ['in', 'out'] as const) {
           const h = v3(side === 'in' ? a.handle_in : a.handle_out);
           if (h.distanceTo(v3(a.position)) > 1e-6) consider({ kind: 'handle', spline: s.id, index, side, position: h });
@@ -174,23 +205,63 @@ export class SkeletonView {
     return best;
   }
 
-  /** Nærmeste punkt på en kurve: spline og andel av buelengden. */
+  /**
+   * Nærmeste punkt på en kurve: spline, andel av buelengden og punktet.
+   * Pekeren projiseres på linjestykkene mellom tegnepunktene, så andelen
+   * følger pekeren jevnt og ikke hopper mellom punktene.
+   */
   pickCurve(clientX: number, clientY: number, maxPx: number, only?: number) {
     const mouse = this.mouse(clientX, clientY);
     let best: { spline: number; at: number; position: THREE.Vector3 } | null = null;
     let bestDist = maxPx;
-    for (const s of this.splines) {
+    for (const s of this.active) {
       if (only !== undefined && s.id !== only) continue;
-      const pts = s.points.map(v3);
-      pts.forEach((p, i) => {
-        const d = this.viewport.toScreen(p).distanceTo(mouse);
-        if (d < bestDist) {
-          bestDist = d;
-          best = { spline: s.id, at: polylineFraction(pts, i), position: p };
+      const near = this.nearestOnPolyline(s.points.map(v3), mouse);
+      if (near && near.d < bestDist) {
+        bestDist = near.d;
+        best = { spline: s.id, at: near.at, position: near.position };
+      }
+    }
+    return best as { spline: number; at: number; position: THREE.Vector3 } | null;
+  }
+
+  /** Nærmeste kontur (tverrsnittsring) på skjermen innenfor `maxPx`. */
+  pickRing(clientX: number, clientY: number, maxPx: number) {
+    const mouse = this.mouse(clientX, clientY);
+    let best: { spline: number; station: number } | null = null;
+    let bestDist = maxPx;
+    for (const s of this.active) {
+      s.profiles.forEach((st, station) => {
+        const pts = st.ring.map(v3);
+        const near = this.nearestOnPolyline([...pts, pts[0]], mouse);
+        if (near && near.d < bestDist) {
+          bestDist = near.d;
+          best = { spline: s.id, station };
         }
       });
     }
-    return best as { spline: number; at: number; position: THREE.Vector3 } | null;
+    return best as { spline: number; station: number } | null;
+  }
+
+  /** Nærmeste punkt på en linje i scenen, målt på skjermen. */
+  private nearestOnPolyline(pts: THREE.Vector3[], screen: THREE.Vector2) {
+    let best: { d: number; at: number; position: THREE.Vector3 } | null = null;
+    const scr = pts.map((p) => this.viewport.toScreen(p));
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
+    const total = cum[cum.length - 1] || 1;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = scr[i];
+      const ab = scr[i + 1].clone().sub(a);
+      const l2 = ab.lengthSq();
+      const t = l2 < 1e-9 ? 0 : THREE.MathUtils.clamp(screen.clone().sub(a).dot(ab) / l2, 0, 1);
+      const d = a.clone().addScaledVector(ab, t).distanceTo(screen);
+      if (!best || d < best.d) {
+        const at = (cum[i] + (cum[i + 1] - cum[i]) * t) / total;
+        best = { d, at, position: pts[i].clone().lerp(pts[i + 1], t) };
+      }
+    }
+    return best;
   }
 
   /**
@@ -201,7 +272,7 @@ export class SkeletonView {
   snapTarget(screen: THREE.Vector2, maxPx: number, exclude: Set<number>): SnapTarget | null {
     let best: SnapTarget | null = null;
     let bestDist = maxPx;
-    for (const s of this.splines) {
+    for (const s of this.active) {
       if (exclude.has(s.id)) continue;
       for (const a of s.anchors) {
         const d = this.viewport.toScreen(v3(a.position)).distanceTo(screen);
@@ -213,7 +284,7 @@ export class SkeletonView {
       }
     }
     if (best) return best;
-    for (const s of this.splines) {
+    for (const s of this.active) {
       if (exclude.has(s.id)) continue;
       const pts = s.points.map(v3);
       for (let i = 0; i + 1 < pts.length; i++) {

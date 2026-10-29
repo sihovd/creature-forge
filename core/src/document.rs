@@ -31,7 +31,7 @@ pub const SPHERE_SPLINE_LENGTH: f64 = 0.5;
 /// Et uttrekk lagret i rammen til en spline i kroppen. Grepet, normalen og
 /// endepunktet er lokale koordinater i rammen i andelen `at` av splinens
 /// buelengde, så uttrekket følger når splinen flyttes, bøyes eller endres.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BoundPull {
     pub spline: SplineId,
     pub at: f64,
@@ -124,6 +124,10 @@ impl Operation {
 pub struct Document {
     /// Ønsket kantlengde i mm for nye og fortettede områder.
     pub target_edge: f64,
+    /// Tilstanden fra en åpnet prosjektfil. Historikken bygger på den, så
+    /// åpningen i seg selv kan ikke angres.
+    base_skeleton: Skeleton,
+    base_pulls: Vec<(ShapeId, BoundPull)>,
     history: Vec<Operation>,
     redo: Vec<Operation>,
     meshes: HashMap<ShapeId, TriMesh>,
@@ -141,6 +145,8 @@ impl Document {
     pub fn new(target_edge: f64) -> Self {
         Document {
             target_edge,
+            base_skeleton: Skeleton::new(),
+            base_pulls: Vec::new(),
             history: Vec::new(),
             redo: Vec::new(),
             meshes: HashMap::new(),
@@ -237,6 +243,9 @@ impl Document {
     /// Uttrekk eller innpressing med et kontrollpunkt. Lager ingen spline.
     pub fn commit_pull(&mut self, shape: ShapeId, pull: Pull) -> Result<(), String> {
         pull.validate()?;
+        if self.skeleton.is_locked(shape) {
+            return Err("Laget er låst".into());
+        }
         let bound = BoundPull::bind(&self.skeleton, shape, &pull)?;
         // Bruk uttrekket slik det spilles av, så angre og gjør om gir samme mesh.
         let resolved = bound.resolve(&self.skeleton).ok_or("Ukjent form")?;
@@ -289,7 +298,48 @@ impl Document {
                 Operation::Skeleton { skeleton } => Some(skeleton.clone()),
                 _ => None,
             })
-            .unwrap_or_else(Skeleton::new)
+            .unwrap_or_else(|| self.base_skeleton.clone())
+    }
+
+    /// Prosjektfilen: skjelettet med lag, konturer og mastere, og uttrekkene
+    /// slik de står nå. Historikken lagres ikke.
+    pub fn to_project_json(&self) -> String {
+        let pulls = self
+            .base_pulls
+            .iter()
+            .copied()
+            .chain(self.history.iter().filter_map(|op| match op {
+                Operation::Pull { shape, pull } => Some((*shape, *pull)),
+                _ => None,
+            }))
+            .map(|(shape, pull)| SavedPull { shape, pull })
+            .collect();
+        let file = ProjectFile {
+            format: PROJECT_FORMAT.into(),
+            version: PROJECT_VERSION,
+            skeleton: self.skeleton.clone(),
+            pulls,
+        };
+        serde_json::to_string_pretty(&file).expect("prosjektet kan alltid serialiseres")
+    }
+
+    /// Åpner en prosjektfil i et nytt dokument med tom historikk.
+    pub fn open_project(text: &str, target_edge: f64) -> Result<Document, String> {
+        let file: ProjectFile =
+            serde_json::from_str(text).map_err(|e| format!("Kunne ikke lese prosjektet: {e}"))?;
+        if file.format != PROJECT_FORMAT {
+            return Err(format!("Ukjent format: {}", file.format));
+        }
+        if file.version != PROJECT_VERSION {
+            return Err(format!("Ukjent prosjektversjon: {}", file.version));
+        }
+        file.skeleton.validate()?;
+        let mut doc = Document::new(target_edge);
+        doc.base_skeleton = file.skeleton.clone();
+        doc.base_pulls = file.pulls.into_iter().map(|p| (p.shape, p.pull)).collect();
+        doc.skeleton = file.skeleton;
+        doc.rebuild_changed(&Skeleton::new())?;
+        Ok(doc)
     }
 
     /// Meshen til kroppen `root`: generert rundt skjelettet, med uttrekkene
@@ -302,12 +352,14 @@ impl Document {
         upto: usize,
     ) -> Result<TriMesh, String> {
         let mut mesh = body_mesh(skeleton, root, h)?;
-        for op in &self.history[..upto] {
-            if let Operation::Pull { shape, pull } = op {
-                if *shape == root {
-                    if let Some(p) = pull.resolve(skeleton) {
-                        mesh = apply_pull(&mesh, &p, self.target_edge)?;
-                    }
+        let history = self.history[..upto].iter().filter_map(|op| match op {
+            Operation::Pull { shape, pull } => Some((shape, pull)),
+            _ => None,
+        });
+        for (shape, pull) in self.base_pulls.iter().map(|(s, p)| (s, p)).chain(history) {
+            if *shape == root {
+                if let Some(p) = pull.resolve(skeleton) {
+                    mesh = apply_pull(&mesh, &p, self.target_edge)?;
                 }
             }
         }
@@ -327,6 +379,24 @@ impl Document {
         }
         Ok(())
     }
+}
+
+const PROJECT_FORMAT: &str = "creature-forge-project";
+const PROJECT_VERSION: u32 = 1;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedPull {
+    shape: ShapeId,
+    pull: BoundPull,
+}
+
+/// Prosjektfilen (.cfproj).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProjectFile {
+    format: String,
+    version: u32,
+    skeleton: Skeleton,
+    pulls: Vec<SavedPull>,
 }
 
 /// Grovere rutenett under drag, så forhåndsvisningen holder følge med pekeren.
@@ -600,5 +670,161 @@ mod tests {
         let rev = doc.revision();
         assert!(doc.commit_skeleton(&E::Remove { spline: 99 }).is_err());
         assert_eq!(doc.revision(), rev);
+    }
+
+    #[test]
+    fn prosjektfil_bevarer_lag_hierarki_konturer_og_uttrekk() {
+        let mut doc = Document::new(2.0);
+        let s = doc.add_sphere([0.0, 25.0, 0.0], 20.0).unwrap();
+        let child = doc
+            .commit_skeleton(&E::AddChild {
+                parent: s,
+                at: 1.0,
+                direction: [1.0, 0.0, 0.0],
+                length: 35.0,
+                thickness: 5.0,
+            })
+            .unwrap()
+            .unwrap();
+        doc.commit_skeleton(&E::Batch {
+            edits: vec![
+                E::Rename {
+                    spline: s,
+                    name: "Kropp".into(),
+                },
+                E::Rename {
+                    spline: child,
+                    name: "Hals".into(),
+                },
+                E::AddProfile {
+                    spline: child,
+                    at: 0.5,
+                    from: None,
+                },
+                E::MakeMaster {
+                    spline: child,
+                    station: 0,
+                },
+            ],
+        })
+        .unwrap();
+        doc.commit_pull(s, pull_on(&doc, s, 8.0)).unwrap();
+        doc.commit_skeleton(&E::SetLayer {
+            spline: s,
+            hidden: true,
+            locked: true,
+        })
+        .unwrap();
+        let text = doc.to_project_json();
+        let opened = Document::open_project(&text, 2.0).unwrap();
+        assert_eq!(opened.skeleton(), doc.skeleton());
+        assert_eq!(
+            opened.mesh(s).unwrap().positions,
+            doc.mesh(s).unwrap().positions
+        );
+        assert!(!opened.can_undo());
+        assert_eq!(opened.skeleton().spline(child).unwrap().name, "Hals");
+        assert!(opened.skeleton().is_locked(child));
+        // Uttrekket er med, og en ny endring etter åpning kan angres tilbake til filen.
+        let mut opened = opened;
+        opened
+            .commit_skeleton(&E::SetLayer {
+                spline: s,
+                hidden: false,
+                locked: false,
+            })
+            .unwrap();
+        opened.commit_pull(s, pull_on(&opened, s, 4.0)).unwrap();
+        opened.undo();
+        opened.undo();
+        assert_eq!(opened.skeleton(), doc.skeleton());
+        assert_eq!(
+            opened.mesh(s).unwrap().positions,
+            doc.mesh(s).unwrap().positions
+        );
+        assert!(Document::open_project("{}", 2.0).is_err());
+    }
+
+    #[test]
+    fn laast_lag_kan_ikke_redigeres_men_kan_laases_opp() {
+        let mut doc = Document::new(2.0);
+        let s = doc.add_sphere([0.0, 25.0, 0.0], 20.0).unwrap();
+        let other = doc.add_sphere([60.0, 25.0, 0.0], 10.0).unwrap();
+        doc.commit_skeleton(&E::SetLayer {
+            spline: s,
+            hidden: false,
+            locked: true,
+        })
+        .unwrap();
+        let rev = doc.revision();
+        assert!(doc
+            .commit_skeleton(&E::Extend {
+                spline: s,
+                delta: 10.0
+            })
+            .is_err());
+        assert!(doc
+            .commit_skeleton(&E::AddChild {
+                parent: s,
+                at: 0.5,
+                direction: [1.0, 0.0, 0.0],
+                length: 30.0,
+                thickness: 4.0,
+            })
+            .is_err());
+        assert!(doc.commit_pull(s, pull_on(&doc, s, 5.0)).is_err());
+        // En samlet redigering med et låst lag i seg avvises i sin helhet.
+        assert!(doc
+            .commit_skeleton(&E::Batch {
+                edits: vec![
+                    E::Extend {
+                        spline: other,
+                        delta: 5.0
+                    },
+                    E::Remove { spline: s },
+                ],
+            })
+            .is_err());
+        assert_eq!(doc.revision(), rev);
+        // Andre lag kan fortsatt redigeres, og laget kan låses opp og gis navn.
+        doc.commit_skeleton(&E::Extend {
+            spline: other,
+            delta: 5.0,
+        })
+        .unwrap();
+        doc.commit_skeleton(&E::Rename {
+            spline: s,
+            name: "Kropp".into(),
+        })
+        .unwrap();
+        doc.commit_skeleton(&E::SetLayer {
+            spline: s,
+            hidden: false,
+            locked: false,
+        })
+        .unwrap();
+        doc.commit_skeleton(&E::Extend {
+            spline: s,
+            delta: 10.0,
+        })
+        .unwrap();
+        // Grener kan ikke skjules eller låses hver for seg.
+        let child = doc
+            .commit_skeleton(&E::AddChild {
+                parent: s,
+                at: 0.5,
+                direction: [1.0, 0.0, 0.0],
+                length: 30.0,
+                thickness: 4.0,
+            })
+            .unwrap()
+            .unwrap();
+        assert!(doc
+            .commit_skeleton(&E::SetLayer {
+                spline: child,
+                hidden: true,
+                locked: false
+            })
+            .is_err());
     }
 }

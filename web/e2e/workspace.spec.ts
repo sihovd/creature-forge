@@ -1,12 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
+import { newSpline, viewport } from './helpers';
 
-const viewport = (page: Page) => page.locator('#viewport');
-
+/** En form å trekke i: en ny spline med mesh rundt. */
 async function addSphere(page: Page) {
   await page.goto('/');
-  const button = page.getByRole('button', { name: 'Legg til kule' });
-  await expect(button).toBeEnabled();
-  await button.click();
+  await newSpline(page);
   await expect(viewport(page)).toHaveAttribute('data-shape-count', '1');
 }
 
@@ -25,10 +23,11 @@ test('appen starter med et tomt arbeidsrom', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Angre' })).toBeDisabled();
 });
 
-test('«Legg til kule» lager en kule med kontrollpunkter', async ({ page }) => {
+test('«Legg til kule» er fjernet, og en ny spline får mesh med kontrollpunkter', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Legg til kule' })).toHaveCount(0);
   await addSphere(page);
   await expect(page.locator('#empty-hint')).toBeHidden();
-  await expect(page.locator('#status')).toContainText('trekanter');
   expect(Number(await viewport(page).getAttribute('data-control-points'))).toBeGreaterThan(20);
 });
 

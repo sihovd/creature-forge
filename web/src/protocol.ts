@@ -13,7 +13,9 @@ export type Command =
   | { kind: 'redo' }
   | { kind: 'controlPoints'; spacingMm: number }
   | { kind: 'previewSkeleton'; edit: SkeletonEdit }
-  | { kind: 'commitSkeleton'; edit: SkeletonEdit };
+  | { kind: 'commitSkeleton'; edit: SkeletonEdit }
+  | { kind: 'saveProject' }
+  | { kind: 'openProject'; text: string };
 
 export type Vec3 = [number, number, number];
 
@@ -41,6 +43,8 @@ export type SkeletonEdit =
   | { kind: 'unlink'; spline: number; station: number }
   | { kind: 'setMaster'; master: number; profile: Profile }
   | { kind: 'setFlatEnd'; spline: number; flat: boolean }
+  | { kind: 'rename'; spline: number; name: string }
+  | { kind: 'setLayer'; spline: number; hidden: boolean; locked: boolean }
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
 export type AnchorKind = 'smooth' | 'corner';
@@ -93,6 +97,13 @@ export interface SplineView {
   anchors: AnchorView[];
   profiles: StationView[];
   flat_end: boolean;
+  /** Navnet brukeren har gitt splinen; tomt når den ikke har fått navn. */
+  name: string;
+  /** Rotsplinen i laget splinen hører til. */
+  layer: number;
+  /** Laget er skjult eller låst. */
+  hidden: boolean;
+  locked: boolean;
 }
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };
@@ -120,6 +131,7 @@ export interface DocumentState {
 export type GeometryResult =
   | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; created: number | null }
   | { kind: 'preview'; shape: number; mesh: MeshResult }
+  | { kind: 'project'; text: string }
   | { kind: 'skeletonPreview'; skeleton: SplineView[]; shapes: { shape: number; mesh: MeshResult | null }[] };
 
 export type GeometryResponse =
