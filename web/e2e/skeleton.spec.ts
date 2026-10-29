@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { newSpline, status, viewport } from './helpers';
+import { newBranch, newSpline, status, viewport } from './helpers';
 
 async function addSpline(page: Page) {
   await page.goto('/');
@@ -62,7 +62,7 @@ test.describe('skjelett med mus', () => {
 
   test('en gren følger når forelderen panoreres med Alt', async ({ page }) => {
     await addSpline(page);
-    await page.getByRole('button', { name: 'Ny gren' }).click();
+    await newBranch(page);
     await expect(viewport(page)).toHaveAttribute('data-splines', '2');
     const childBefore = await anchor(page, 2, -1);
     const tip = await anchor(page, 1, -1);

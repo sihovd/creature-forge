@@ -501,6 +501,7 @@ mod tests {
             direction: [1.0, 0.0, 0.0],
             length: 40.0,
             thickness: 6.0,
+            orientation: Default::default(),
         })
         .unwrap();
         let m = body_mesh(&sk, id, 1.5).unwrap();

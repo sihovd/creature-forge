@@ -58,6 +58,19 @@ impl Anchor {
     }
 }
 
+/// Hvordan en gren følger forelderen (Sivert 29. oktober 2026).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    /// Festet og grenens retning følger forelderens lokale ramme, så
+    /// grenens vinkel mot forelderen bevares når forelderen bøyes.
+    #[default]
+    FollowParent,
+    /// Festet følger forelderen, men grenen beholder retningen i
+    /// verdensrommet når forelderen bøyes eller redigeres.
+    KeepDirection,
+}
+
 /// Festet til en barnespline: forelderen og en andel av dens buelengde.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Attachment {
@@ -93,6 +106,9 @@ pub struct Spline {
     /// Laget er låst mot redigering. Gjelder bare rotspliner.
     #[serde(default)]
     pub locked: bool,
+    /// Hvordan en gren følger forelderen. Uten betydning for rotspliner.
+    #[serde(default)]
+    pub orientation: Orientation,
 }
 
 /// Ortonormal ramme: tangent T og tverretningene U og V.
@@ -451,6 +467,8 @@ pub enum SkeletonEdit {
         direction: Vec3,
         length: f64,
         thickness: f64,
+        #[serde(default)]
+        orientation: Orientation,
     },
     MoveAnchor {
         spline: SplineId,
@@ -491,9 +509,19 @@ pub enum SkeletonEdit {
         angle: f64,
         radius: f64,
     },
+    /// Flytter festet til andelen `at`, eventuelt over på en ny forelder.
+    /// Grenen beholder vinkelen mot forelderen (følg forelder) eller
+    /// retningen i verdensrommet (behold retning), og undergrenene følger.
     Reattach {
         spline: SplineId,
         at: f64,
+        #[serde(default)]
+        parent: Option<SplineId>,
+    },
+    /// Bytter hvordan grenen følger forelderen, uten at den flytter seg.
+    SetOrientation {
+        spline: SplineId,
+        orientation: Orientation,
     },
     /// Flytter en rotspline med alle grener.
     Translate {
@@ -634,10 +662,15 @@ impl Skeleton {
                 direction,
                 length,
                 thickness,
+                orientation,
             } => {
                 let start = self.world_spline(parent)?.point_at(at);
                 let anchors = straight_anchors(start, direction, length)?;
-                return self.add_child(parent, at, anchors, thickness).map(Some);
+                let id = self.add_child(parent, at, anchors, thickness)?;
+                if orientation != Orientation::FollowParent {
+                    self.set_orientation(id, orientation)?;
+                }
+                return Ok(Some(id));
             }
             E::MoveAnchor {
                 spline,
@@ -698,7 +731,11 @@ impl Skeleton {
                 let anchors = crate::bend::bend_from(&world, world.anchor_fraction(from), &bend)?;
                 self.set_world_anchors(spline, anchors)?
             }
-            E::Reattach { spline, at } => self.reattach(spline, at)?,
+            E::Reattach { spline, at, parent } => self.reattach(spline, parent, at)?,
+            E::SetOrientation {
+                spline,
+                orientation,
+            } => self.set_orientation(spline, orientation)?,
             E::Translate { spline, delta } => self.translate(spline, delta)?,
             E::SetThickness { spline, thickness } => self.set_thickness(spline, thickness)?,
             E::Remove { spline } => self.remove(spline)?,
@@ -858,6 +895,7 @@ pub struct SplineView {
     /// Laget er skjult eller låst (arves fra rotsplinen).
     pub hidden: bool,
     pub locked: bool,
+    pub orientation: Orientation,
 }
 
 /// En profilstasjon slik visningen og profileditoren trenger den.
@@ -958,6 +996,7 @@ impl Skeleton {
                     layer: root,
                     hidden: layer.hidden,
                     locked: layer.locked,
+                    orientation: spline.orientation,
                     id: *id,
                     parent: spline.attachment.map(|a| a.parent),
                     at: spline.attachment.map_or(0.0, |a| a.at),
@@ -1046,6 +1085,7 @@ impl Skeleton {
             name: String::new(),
             hidden: false,
             locked: false,
+            orientation: Orientation::FollowParent,
         };
         self.insert(spline)
     }
@@ -1061,6 +1101,7 @@ impl Skeleton {
     ) -> Result<SplineId, String> {
         let attachment = Attachment { parent, at };
         let frame = self.attachment_frame(&attachment)?;
+        // Splinen er ny og følger forelderen, så festerammen er forelderens ramme.
         let spline = Spline {
             anchors: to_local(&frame, &world_anchors),
             attachment: Some(attachment),
@@ -1071,6 +1112,7 @@ impl Skeleton {
             name: String::new(),
             hidden: false,
             locked: false,
+            orientation: Orientation::FollowParent,
         };
         self.insert(spline)
     }
@@ -1103,14 +1145,41 @@ impl Skeleton {
         Ok(self.world_spline(a.parent)?.frame_at(a.at))
     }
 
+    /// Rammen grenens punkter er lagret i, og referanseretningen for
+    /// grenens egen ramme, ut fra forelderens ramme i festet.
+    fn placement(spline: &Spline, parent_frame: Frame) -> (Frame, Vec3) {
+        match spline.orientation {
+            Orientation::FollowParent => (parent_frame, parent_frame.u),
+            // Bare festepunktet følger; aksene er verdensaksene.
+            Orientation::KeepDirection => (
+                Frame {
+                    origin: parent_frame.origin,
+                    t: [0.0, 0.0, 1.0],
+                    u: [1.0, 0.0, 0.0],
+                    v: [0.0, 1.0, 0.0],
+                },
+                spline.up,
+            ),
+        }
+    }
+
+    /// Rammen punktene til grenen `id` er lagret i.
+    fn child_frame(&self, id: SplineId) -> Result<Frame, String> {
+        let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
+        let a = spline
+            .attachment
+            .ok_or("Splinen er ikke festet til en forelder")?;
+        Ok(Self::placement(spline, self.attachment_frame(&a)?).0)
+    }
+
     /// Splinen i verdenskoordinater. Forfedrene evalueres først.
     pub fn world_spline(&self, id: SplineId) -> Result<WorldSpline, String> {
         let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
         match spline.attachment {
             None => WorldSpline::new(spline.anchors.clone(), spline.up),
             Some(a) => {
-                let frame = self.attachment_frame(&a)?;
-                WorldSpline::new(to_world(&frame, &spline.anchors), frame.u)
+                let (frame, up) = Self::placement(spline, self.attachment_frame(&a)?);
+                WorldSpline::new(to_world(&frame, &spline.anchors), up)
             }
         }
     }
@@ -1124,8 +1193,8 @@ impl Skeleton {
                 let world = match s.attachment {
                     None => WorldSpline::new(s.anchors.clone(), s.up)?,
                     Some(a) => {
-                        let frame = out[&a.parent].frame_at(a.at);
-                        WorldSpline::new(to_world(&frame, &s.anchors), frame.u)?
+                        let (frame, up) = Self::placement(s, out[&a.parent].frame_at(a.at));
+                        WorldSpline::new(to_world(&frame, &s.anchors), up)?
                     }
                 };
                 out.insert(id, world);
@@ -1144,7 +1213,7 @@ impl Skeleton {
         let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
         let anchors = match spline.attachment {
             None => world_anchors,
-            Some(a) => to_local(&self.attachment_frame(&a)?, &world_anchors),
+            Some(_) => to_local(&self.child_frame(id)?, &world_anchors),
         };
         self.update(id, |s| s.anchors = anchors)
     }
@@ -1235,13 +1304,49 @@ impl Skeleton {
         })
     }
 
-    /// Flytter festet langs forelderen. Barnets form i festets ramme beholdes.
-    pub fn reattach(&mut self, id: SplineId, at: f64) -> Result<(), String> {
+    /// Flytter festet langs forelderen, eller over på en ny forelder. Grenens
+    /// punkter i festerammen beholdes: med «følg forelder» er det vinkelen mot
+    /// forelderen, med «behold retning» retningen i verdensrommet. Sløyfer og
+    /// feste til seg selv avvises av valideringen.
+    pub fn reattach(
+        &mut self,
+        id: SplineId,
+        parent: Option<SplineId>,
+        at: f64,
+    ) -> Result<(), String> {
         let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
         let Some(a) = spline.attachment else {
             return Err("Splinen er ikke festet til en forelder".into());
         };
-        self.update(id, |s| s.attachment = Some(Attachment { at, ..a }))
+        let parent = parent.unwrap_or(a.parent);
+        if parent == id || self.descendants(id).contains(&parent) {
+            return Err("En gren kan ikke festes til seg selv eller sine egne undergrener".into());
+        }
+        self.update(id, |s| s.attachment = Some(Attachment { parent, at }))
+    }
+
+    /// Bytter hvordan grenen følger forelderen. Grenen står der den står; bare
+    /// lagringen av punktene endres, så det blir ikke noe hopp.
+    pub fn set_orientation(
+        &mut self,
+        id: SplineId,
+        orientation: Orientation,
+    ) -> Result<(), String> {
+        let world = self.world_spline(id)?;
+        if self.splines[&id].attachment.is_none() {
+            return Err("Bare en gren kan følge eller beholde retningen".into());
+        }
+        // Med «behold retning» lagres grenens egen referanseretning i
+        // verdensrommet, så tverrsnittet ikke vrir seg når forelderen bøyes.
+        let up = world.start_frame().u;
+        let mut next = self.clone();
+        next.update(id, |s| {
+            s.orientation = orientation;
+            s.up = up;
+        })?;
+        next.set_world_anchors(id, world.anchors)?;
+        *self = next;
+        Ok(())
     }
 
     /// Tykkelsen endrer ikke skjelettet eller festene.
@@ -1320,6 +1425,7 @@ impl Skeleton {
             | E::Extend { spline, .. }
             | E::Bend { spline, .. }
             | E::Reattach { spline, .. }
+            | E::SetOrientation { spline, .. }
             | E::Translate { spline, .. }
             | E::SetThickness { spline, .. }
             | E::Remove { spline }
@@ -1626,7 +1732,7 @@ mod tests {
         sk.set_handle(child, 1, HandleSide::Out, [30.0, 15.0, 55.0])
             .unwrap();
         sk.set_anchor_kind(child, 1, AnchorKind::Corner).unwrap();
-        sk.reattach(child, 0.8).unwrap();
+        sk.reattach(child, None, 0.8).unwrap();
         assert_eq!(sk.world_anchors(root).unwrap(), parent_before);
         // Barnebarnet følger barnets nye ende.
         let w = sk.evaluate().unwrap();
@@ -1771,6 +1877,7 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 length: 20.0,
                 thickness: 2.0,
+                orientation: Orientation::FollowParent,
             })
             .unwrap()
             .unwrap();
@@ -1975,5 +2082,162 @@ mod tests {
             s.remove("flat_end");
         }
         assert_eq!(Skeleton::from_json(&json.to_string()).unwrap(), sk);
+    }
+
+    /// Bøyer roten i `three_levels` 90° mot +x med pivot 0,3.
+    fn bend_root(sk: &mut Skeleton, root: SplineId) {
+        let bend = Bend {
+            direction: [1.0, 0.0, 0.0],
+            angle: PI / 2.0,
+            radius: 30.0,
+            pivot: 0.3,
+        };
+        sk.set_world_anchors(
+            root,
+            bent_anchors([0.0; 3], [0.0, 0.0, 1.0], 100.0, &bend).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn behold_retning_holder_grenen_fast_i_verdensrommet_mens_festet_folger() {
+        let (mut sk, root, child, gc) = three_levels();
+        sk.set_orientation(child, Orientation::KeepDirection)
+            .unwrap();
+        let before = sk.evaluate().unwrap();
+        bend_root(&mut sk, root);
+        let after = sk.evaluate().unwrap();
+        // Festet følger forelderen.
+        assert!(close(
+            after[&child].point_at(0.0),
+            after[&root].point_at(0.5),
+            1e-9
+        ));
+        // Grenen er bare flyttet, ikke rotert: alle punkter har samme forskyvning.
+        let shift = sub(after[&child].point_at(0.0), before[&child].point_at(0.0));
+        assert!(length(shift) > 1.0);
+        for (a, b) in before[&child].anchors.iter().zip(&after[&child].anchors) {
+            assert!(close(sub(b.position, a.position), shift, 1e-9));
+            assert!(close(b.handle_out, a.handle_out, 1e-9));
+        }
+        // Tverrsnittets ramme vrir seg ikke, og undergrenen følger grenen.
+        let (f0, f1) = (before[&child].start_frame(), after[&child].start_frame());
+        assert!(close(f0.u, f1.u, 1e-9));
+        assert!(close(
+            sub(after[&gc].point_at(1.0), before[&gc].point_at(1.0)),
+            shift,
+            1e-9
+        ));
+    }
+
+    #[test]
+    fn bytte_av_orientering_gir_ikke_hopp() {
+        let (mut sk, root, child, gc) = three_levels();
+        bend_root(&mut sk, root);
+        let before = sk.evaluate().unwrap();
+        for o in [
+            Orientation::KeepDirection,
+            Orientation::FollowParent,
+            Orientation::KeepDirection,
+        ] {
+            sk.apply(&SkeletonEdit::SetOrientation {
+                spline: child,
+                orientation: o,
+            })
+            .unwrap();
+            let after = sk.evaluate().unwrap();
+            for id in [child, gc] {
+                for (a, b) in before[&id].anchors.iter().zip(&after[&id].anchors) {
+                    assert!(close(a.position, b.position, 1e-9));
+                    assert!(close(a.handle_in, b.handle_in, 1e-9));
+                }
+                assert!(close(
+                    before[&id].start_frame().u,
+                    after[&id].start_frame().u,
+                    1e-9
+                ));
+            }
+        }
+        // En rotspline har ingen forelder å følge.
+        assert!(sk
+            .apply(&SkeletonEdit::SetOrientation {
+                spline: root,
+                orientation: Orientation::KeepDirection
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn festet_flyttes_over_paa_en_annen_spline_med_undergrener() {
+        let (mut sk, root, child, gc) = three_levels();
+        // En annen gren på roten, ut langs -x fra 0,8.
+        let other = sk
+            .add_child(
+                root,
+                0.8,
+                straight([0.0, 0.0, 80.0], [-1.0, 0.0, 0.0], 30.0),
+                4.0,
+            )
+            .unwrap();
+        let before = sk.evaluate().unwrap();
+        let angle = |w: &BTreeMap<SplineId, WorldSpline>, parent: SplineId, at: f64| {
+            dot(w[&parent].frame_at(at).t, w[&child].frame_at(0.0).t)
+        };
+        let a0 = angle(&before, root, 0.5);
+        // Følg forelder: vinkelen mot den nye forelderen er den samme.
+        sk.apply(&SkeletonEdit::Reattach {
+            spline: child,
+            at: 0.5,
+            parent: Some(other),
+        })
+        .unwrap();
+        let after = sk.evaluate().unwrap();
+        assert_eq!(sk.spline(child).unwrap().attachment.unwrap().parent, other);
+        assert!(close(
+            after[&child].point_at(0.0),
+            after[&other].point_at(0.5),
+            1e-9
+        ));
+        assert!((angle(&after, other, 0.5) - a0).abs() < 1e-9);
+        assert!((after[&child].length - before[&child].length).abs() < 1e-9);
+        // Undergrenen er med.
+        assert!(close(
+            after[&gc].point_at(0.0),
+            after[&child].point_at(1.0),
+            1e-9
+        ));
+
+        // Behold retning: verdensretningen er den samme etter flyttingen.
+        sk.apply(&SkeletonEdit::SetOrientation {
+            spline: child,
+            orientation: Orientation::KeepDirection,
+        })
+        .unwrap();
+        let dir0 = sk.evaluate().unwrap()[&child].frame_at(0.0).t;
+        sk.apply(&SkeletonEdit::Reattach {
+            spline: child,
+            at: 0.2,
+            parent: Some(root),
+        })
+        .unwrap();
+        let w = sk.evaluate().unwrap();
+        assert!(close(w[&child].frame_at(0.0).t, dir0, 1e-9));
+        assert!(close(w[&child].point_at(0.0), w[&root].point_at(0.2), 1e-9));
+
+        // Ingen feste til seg selv eller til egne undergrener, og ingen sløyfer.
+        let rejected = |sk: &mut Skeleton, parent| {
+            sk.apply(&SkeletonEdit::Reattach {
+                spline: child,
+                at: 0.5,
+                parent: Some(parent),
+            })
+            .is_err()
+        };
+        assert!(rejected(&mut sk, child));
+        assert!(rejected(&mut sk, gc));
+        assert!(sk.validate().is_ok());
+        // Lagring og åpning bevarer festet og orienteringen.
+        let opened = Skeleton::from_json(&sk.to_json()).unwrap();
+        assert_eq!(opened, sk);
     }
 }

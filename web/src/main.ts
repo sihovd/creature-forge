@@ -35,6 +35,9 @@ const layerHidden = $<HTMLInputElement>('#layer-hidden');
 const layerLocked = $<HTMLInputElement>('#layer-locked');
 const lockedInfo = $('#locked-info');
 const editSections = $<HTMLFieldSetElement>('#edit-sections');
+const branchSection = $('#branch-section');
+const orientFollow = $<HTMLButtonElement>('#orient-follow');
+const orientKeep = $<HTMLButtonElement>('#orient-keep');
 const undoButton = $<HTMLButtonElement>('#undo');
 const redoButton = $<HTMLButtonElement>('#redo');
 const spacingInput = $<HTMLInputElement>('#spacing');
@@ -142,6 +145,9 @@ function updateSkeletonPanel() {
   anchorKind.disabled = !anchor;
   anchorKind.textContent = anchor?.kind === 'corner' ? 'Mykt punkt' : 'Hjørnepunkt';
   if (spline) thicknessInput.value = String(spline.thickness);
+  branchSection.hidden = !spline || spline.parent === null || !!sel?.layer;
+  orientFollow.setAttribute('aria-pressed', String(spline?.orientation !== 'keep_direction'));
+  orientKeep.setAttribute('aria-pressed', String(spline?.orientation === 'keep_direction'));
   profiles?.update();
   updateInspector();
   layers?.render();
@@ -314,17 +320,50 @@ toggleLayers.addEventListener('click', () => {
 // Laglisten er lukket på små skjermer til brukeren åpner den.
 if (narrow.matches) toggleLayers.click();
 
-/** Ny gren fra andelen `at` av `parent`, mot `toward` eller mot høyre i bildet. */
+/**
+ * Ny gren fra andelen `at` av `parent`. Et retningshåndtak vises først,
+ * foreslått vinkelrett på forelderen i festepunktet (mot `toward` eller mot
+ * høyre i bildet). Grenen får sin egen retning; forelderens kurve og
+ * håndtak endres ikke.
+ */
 function addBranchAt(parent: SplineView, at: number, toward?: THREE.Vector3) {
-  const anchor = parent.anchors.reduce((a, b) => (Math.abs(b.at - at) < Math.abs(a.at - at) ? b : a));
-  const tangent = new THREE.Vector3(...anchor.tangent);
+  const pts = parent.points.map((q) => new THREE.Vector3(...q));
+  const { point, tangent } = pointOnPolyline(pts, at);
   const dir = (toward ?? viewport.projector.cameraRight).clone().projectOnPlane(tangent);
   if (dir.lengthSq() < 1e-6) dir.copy(viewport.projector.cameraUp).projectOnPlane(tangent);
-  editSkeleton(
-    // Lang nok til å stikke ut av forelderens mesh.
-    { kind: 'addChild', parent: parent.id, at, direction: arr(dir.normalize()), length: parent.thickness + 20, thickness: parent.thickness * 0.6 },
-    'Ny gren',
+  // Lang nok til å stikke ut av forelderens mesh.
+  const length = parent.thickness + 20;
+  status.textContent = 'Ny gren: dra håndtaket for retning og lengde, trykk på det for å godta, eller velg en akse.';
+  gizmo.show(
+    point,
+    (direction, picked) =>
+      editSkeleton(
+        { kind: 'addChild', parent: parent.id, at, direction, length: picked ?? length, thickness: parent.thickness * 0.6 },
+        'Ny gren',
+      ),
+    { dir: dir.normalize(), length, text: 'Ny gren: dra håndtaket eller velg akse' },
   );
+}
+
+/** Punktet og retningen i andelen `at` av buelengden langs en linje. */
+function pointOnPolyline(pts: THREE.Vector3[], at: number) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
+  const target = THREE.MathUtils.clamp(at, 0, 1) * cum[cum.length - 1];
+  let i = 1;
+  while (i < pts.length - 1 && cum[i] < target) i++;
+  const span = cum[i] - cum[i - 1];
+  const t = span > 0 ? (target - cum[i - 1]) / span : 0;
+  const tangent = pts[i].clone().sub(pts[i - 1]).normalize();
+  return { point: pts[i - 1].clone().lerp(pts[i], t), tangent };
+}
+
+for (const [button, orientation] of [[orientFollow, 'follow_parent'], [orientKeep, 'keep_direction']] as const) {
+  button.addEventListener('click', () => {
+    const s = skeleton.selection && skeleton.spline(skeleton.selection.spline);
+    if (!s || s.parent === null || s.orientation === orientation) return;
+    editSkeleton({ kind: 'setOrientation', spline: s.id, orientation }, orientation === 'keep_direction' ? 'Grenen beholder retningen' : 'Grenen følger forelderen');
+  });
 }
 
 addBranch.addEventListener('click', () => {
@@ -705,6 +744,8 @@ declare global {
       splineCurvePoint(spline: number, fraction: number): { x: number; y: number } | null;
       /** Ankerpunktene i verdenskoordinater. */
       splineAnchorsWorld(spline: number): Vec3[] | null;
+      /** Forelder, feste og orientering. */
+      splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number } | null;
     };
   }
 }
@@ -749,6 +790,10 @@ window.creatureForgeTest = {
     const rect = viewport.renderer.domElement.getBoundingClientRect();
     const p = viewport.toScreen(new THREE.Vector3(...q));
     return { x: rect.left + p.x, y: rect.top + p.y };
+  },
+  splineInfo(spline) {
+    const s = skeleton.spline(spline);
+    return s ? { parent: s.parent, at: s.at, orientation: s.orientation, layer: s.layer } : null;
   },
   splineAnchorsWorld(spline) {
     return skeleton.spline(spline)?.anchors.map((a) => a.position) ?? null;

@@ -247,6 +247,14 @@ export class Viewport {
     return this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
   }
 
+  /** Punktet under pekeren i planet gjennom `origin` vinkelrett på synsretningen. */
+  pointInViewPlane(clientX: number, clientY: number, origin: THREE.Vector3): THREE.Vector3 | null {
+    this.setRay(clientX, clientY);
+    const normal = this.camera.getWorldDirection(new THREE.Vector3());
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin);
+    return this.raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+  }
+
   /** Flytter kameraet tilbake til utgangsvisningen. */
   resetView() {
     this.camera.position.set(75, 70, 105);

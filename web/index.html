@@ -70,6 +70,14 @@
           <span class="field"><input id="thickness" type="number" min="0.5" max="50" step="0.5" value="5" inputmode="decimal" /> mm</span>
         </label>
         <label class="check"><input id="flat-end" type="checkbox" disabled /> Flat ende (hel endeprofil)</label>
+        <div id="branch-section" hidden>
+          <h2 class="section">Gren</h2>
+          <div class="segmented" role="group" aria-label="Hvordan grenen følger forelderen">
+            <button id="orient-follow" type="button" aria-pressed="true" title="Festet og grenens retning følger forelderens rotasjon">Følg forelder</button>
+            <button id="orient-keep" type="button" aria-pressed="false" title="Festet følger forelderen, retningen er fast i rommet">Behold retning</button>
+          </div>
+          <p class="help">Dra grenens feste (det lille punktet ved forelderen) langs forelderen og videre over på andre spliner i laget.</p>
+        </div>
         <h2 class="section">Kontur</h2>
         <div class="row">
           <select id="station-select" aria-label="Valgt kontur" disabled></select>

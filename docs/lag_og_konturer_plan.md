@@ -37,7 +37,7 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 | --- | --- | --- |
 | 1 | Kartlegge og gjenskape feil | Gjort (dette dokumentet) |
 | 2 | Lagliste, objektvalg, skjul og lås, aksekors for ny spline, Bézier-innsetting, langtrykk, lagring og åpning, fjerne «Legg til kule» | Gjort, se under |
-| 3 | Orienteringsvalg for grener, «Ny gren» med retningshåndtak, flytting av festet gjennom spline-nettverket | Ikke startet |
+| 3 | Orienteringsvalg for grener, «Ny gren» med retningshåndtak, flytting av festet gjennom spline-nettverket | Gjort, se under |
 | 4 | «Ny kontur» der brukeren trykker, flytting langs splinen, konturredigering på modellen | Ikke startet |
 | 5 | Konturregister, presets (sirkel, ellipse, egg, trekant), volumpreset, masterkobling | Ikke startet |
 | 6 | Stabilisering før Surface Pen, Surface Brush og mirror | Ikke startet |
@@ -55,7 +55,13 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 - **Langtrykk** med finger eller penn åpner samme hurtigmeny som høyreklikk med mus.
 - **Lagring.** «Lagre» (Ctrl+S) laster ned `skapning.cfproj` med skjelett, lag, konturer, mastere og uttrekk. «Åpne» (Ctrl+O) leser filen; historikken starter fra filen. Formatet er JSON med `format` og `version`.
 
-## 4 Videre retning som ikke implementeres nå
+## 4 Trinn 3: grenens orientering og feste
+
+- **Orientering** (`Spline::orientation`). «Følg forelder» lagrer grenens punkter i forelderens lokale ramme i festet, så vinkelen mot forelderen bevares når forelderen bøyes. «Behold retning» lagrer punktene med verdensaksene og bare festepunktet fra forelderen, så grenen flyttes uten å roteres; grenens egen referanseretning for tverrsnittet lagres også i verdensrommet, så profilene ikke vrir seg. Byttet regner om punktene fra den viste tilstanden, så grenen står der den står. Undergrener følger sine egne innstillinger. Valget ligger under «Gren» i inspektøren.
+- **Ny gren** (knappen, eller «Ny gren her» i hurtigmenyen) viser først et retningshåndtak i festepunktet, foreslått vinkelrett på forelderens tangent i nettopp det punktet (ikke i nærmeste ankerpunkt). Håndtaket kan dras fritt for retning og lengde, et trykk godtar forslaget, og aksene ±X, ±Y og ±Z kan velges direkte. Forelderens kurve og håndtak endres ikke.
+- **Flytting av festet.** Grenens første punkt dras langs forelderen. Nær et kryss (en gren festet til splinen, eller splinens eget feste) vises de andre splinene stiplet med en ring i krysset, og festet går over på den splinen pekeren er nærmest. Det gir en «vei gjennom veikrysset». Forelderkoblingen oppdateres i samme redigering (`Reattach` med `parent`), undergrenene følger med, og grenens punkter i festerammen beholdes: vinkelen mot den nye forelderen med «Følg forelder», verdensretningen med «Behold retning». Grenen selv og undergrenene dens er aldri mulige mål, og kjernen avviser feste til seg selv, til egne undergrener og sløyfer. Flyttingen er ett angresteg og lagres i prosjektfilen.
+
+## 5 Videre retning som ikke implementeres nå
 
 ### Surface Pen og Surface Brush
 

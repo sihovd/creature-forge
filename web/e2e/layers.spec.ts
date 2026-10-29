@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { anchorScreen, anchorsWorld, closeLayersOnMobile, curveScreen, layerRow, newSpline, status, viewport } from './helpers';
+import { anchorScreen, anchorsWorld, closeLayersOnMobile, curveScreen, layerRow, newBranch, newSpline, status, viewport } from './helpers';
 
 const length = (page: Page, spline: number) =>
   page.evaluate((s) => window.creatureForgeTest!.splineLength(s), spline) as Promise<number>;
@@ -37,7 +37,7 @@ test('laglisten viser lag, grener og konturer, og valget samsvarer med 3D', asyn
   // Velg hovedsplinen i lag 1 i listen og lag en gren og en kontur.
   await row(page, 's1').click();
   await expect(viewport(page)).toHaveAttribute('data-selection', 'spline:1');
-  await page.getByRole('button', { name: 'Ny gren' }).click();
+  await newBranch(page);
   await expect(viewport(page)).toHaveAttribute('data-splines', '3');
   await (await expectRow(page, 's3')).toContainText('Gren 3');
   await row(page, 's1').click();
@@ -110,7 +110,7 @@ test.describe('skjul og lås med mus', () => {
     expect(await length(page, 1)).toBeCloseTo(40, 6);
     await row(page, 's1').click();
     await expect(page.locator('#edit-sections')).toHaveAttribute('disabled', '');
-    await expect(page.getByRole('button', { name: 'Ny gren' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Ny gren', exact: true })).toBeDisabled();
     await expect(page.locator('#locked-info')).toBeVisible();
     await page.locator('#layer-locked').uncheck();
     await expect(viewport(page)).toHaveAttribute('data-locked-layers', '0');
@@ -129,7 +129,7 @@ test.describe('skjul og lås med mus', () => {
     // Valgt tupp: grenen festes der.
     const t0 = await anchorScreen(page, 1, -1);
     await page.mouse.click(t0.x, t0.y);
-    await page.getByRole('button', { name: 'Ny gren' }).click();
+    await newBranch(page);
     await expect(viewport(page)).toHaveAttribute('data-splines', '2');
     expect(dist((await anchorsWorld(page, 2))[0], (await anchorsWorld(page, 1))[1])).toBeLessThan(1e-6);
     const child = await anchorsWorld(page, 2);
@@ -171,7 +171,7 @@ test('lagre og åpne prosjektet bevarer lag, navn, grener og konturer', async ({
   await page.goto('/');
   await newSpline(page);
   await row(page, 's1').click();
-  await page.getByRole('button', { name: 'Ny gren' }).click();
+  await newBranch(page);
   await expect(viewport(page)).toHaveAttribute('data-splines', '2');
   await page.getByRole('button', { name: 'Ny kontur' }).click();
   await row(page, 'l1').click();

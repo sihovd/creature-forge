@@ -93,6 +93,7 @@ test.describe('med mus', () => {
     await page.mouse.click(mid.x + 25, mid.y, { button: 'right' });
     await expect(menu).toContainText('Lag 1');
     await menu.getByRole('menuitem', { name: 'Ny gren ut herfra' }).click();
+    await page.locator('.axis-free').click();
     await expect(viewport(page)).toHaveAttribute('data-splines', '2');
     await expect(viewport(page)).toHaveAttribute('data-shape-count', '1');
   });

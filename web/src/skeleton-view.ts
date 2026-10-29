@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SplineView } from './protocol';
+import type { SplineView, Vec3 } from './protocol';
 import { polylineFraction } from './skeleton-math';
 import type { Viewport } from './viewport';
 
@@ -9,6 +9,7 @@ const HANDLE_COLOR = 0x7a7f73;
 const RING_COLOR = 0x1fa39b;
 const SNAP_COLOR = 0x1f9d55;
 const LOCKED_COLOR = 0x9a9e95;
+const ROUTE_COLOR = 0x12a39a;
 
 /** Noe i skjelettet som kan gripes. */
 export type SkeletonPick =
@@ -60,8 +61,12 @@ export class SkeletonView {
     ring: new THREE.LineBasicMaterial({ color: RING_COLOR, depthTest: false, transparent: true, opacity: 0.8 }),
     locked: new THREE.LineBasicMaterial({ color: LOCKED_COLOR, depthTest: false, transparent: true, opacity: 0.6 }),
     selectedRing: new THREE.LineBasicMaterial({ color: SELECTED_COLOR, depthTest: false }),
+    route: new THREE.LineBasicMaterial({ color: ROUTE_COLOR, depthTest: false }),
+    routeOption: new THREE.LineDashedMaterial({ color: ROUTE_COLOR, dashSize: 2, gapSize: 1.5, depthTest: false }),
+    routeMarker: new THREE.MeshBasicMaterial({ color: ROUTE_COLOR, depthTest: false }),
   };
   private snapMarker: THREE.Mesh;
+  private route = new THREE.Group();
   private bendRing: THREE.Mesh;
   private bendLine: THREE.Line;
 
@@ -83,6 +88,7 @@ export class SkeletonView {
     this.snapMarker.renderOrder = 4;
     this.snapMarker.visible = false;
     viewport.addToScene(this.snapMarker);
+    viewport.addToScene(this.route);
     viewport.addToScene(this.group);
     viewport.addToScene(this.bendRing);
     viewport.addToScene(this.bendLine);
@@ -223,6 +229,42 @@ export class SkeletonView {
       }
     }
     return best as { spline: number; at: number; position: THREE.Vector3 } | null;
+  }
+
+  /** Nærmeste punkt på splinen `id` til pekeren, med avstand på skjermen i piksler. */
+  nearestOn(id: number, clientX: number, clientY: number) {
+    const s = this.spline(id);
+    return s ? this.nearestOnPolyline(s.points.map(v3), this.mouse(clientX, clientY)) : null;
+  }
+
+  /**
+   * Viser banen et grenfeste flyttes langs (`current`) og splinene det kan gå
+   * videre over på i et kryss (`options`, med kryssene markert).
+   */
+  showRoute(current: number | null, options: { spline: number; junction: THREE.Vector3 }[] = []) {
+    for (const child of [...this.route.children]) {
+      this.route.remove(child);
+      if (child instanceof THREE.Line) child.geometry.dispose();
+    }
+    const s = current === null ? null : this.spline(current);
+    if (!s) return;
+    const line = (pts: Vec3[], mat: THREE.Material) => {
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts.map(v3)), mat);
+      l.computeLineDistances();
+      l.renderOrder = 4;
+      this.route.add(l);
+    };
+    line(s.points, this.materials.route);
+    for (const o of options) {
+      const other = this.spline(o.spline);
+      if (other) line(other.points, this.materials.routeOption);
+      const ring = new THREE.Mesh(this.snapMarker.geometry, this.materials.routeMarker);
+      ring.position.copy(o.junction);
+      ring.quaternion.copy(this.viewport.camera.quaternion);
+      ring.scale.setScalar(3 / this.viewport.pixelsPerMm(o.junction));
+      ring.renderOrder = 4;
+      this.route.add(ring);
+    }
   }
 
   /** Nærmeste kontur (tverrsnittsring) på skjermen innenfor `maxPx`. */

@@ -22,7 +22,7 @@ export type Vec3 = [number, number, number];
 /** Redigeringer av spline-skjelettet. Speiler `SkeletonEdit` i kjernen. */
 export type SkeletonEdit =
   | { kind: 'addRoot'; start: Vec3; direction: Vec3; length: number; thickness: number }
-  | { kind: 'addChild'; parent: number; at: number; direction: Vec3; length: number; thickness: number }
+  | { kind: 'addChild'; parent: number; at: number; direction: Vec3; length: number; thickness: number; orientation?: Orientation }
   | { kind: 'moveAnchor'; spline: number; index: number; position: Vec3 }
   | { kind: 'moveTip'; spline: number; position: Vec3 }
   | { kind: 'setHandle'; spline: number; index: number; side: 'in' | 'out'; position: Vec3 }
@@ -30,7 +30,8 @@ export type SkeletonEdit =
   | { kind: 'insertAnchor'; spline: number; at: number }
   | { kind: 'extend'; spline: number; delta: number }
   | { kind: 'bend'; spline: number; from: number; direction: Vec3; angle: number; radius: number }
-  | { kind: 'reattach'; spline: number; at: number }
+  | { kind: 'reattach'; spline: number; at: number; parent?: number }
+  | { kind: 'setOrientation'; spline: number; orientation: Orientation }
   | { kind: 'translate'; spline: number; delta: Vec3 }
   | { kind: 'setThickness'; spline: number; thickness: number }
   | { kind: 'remove'; spline: number }
@@ -48,6 +49,9 @@ export type SkeletonEdit =
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
 export type AnchorKind = 'smooth' | 'corner';
+
+/** Hvordan en gren følger forelderen: forelderens rotasjon eller fast retning i verdensrommet. */
+export type Orientation = 'follow_parent' | 'keep_direction';
 
 export type Vec2 = [number, number];
 
@@ -104,6 +108,7 @@ export interface SplineView {
   /** Laget er skjult eller låst. */
   hidden: boolean;
   locked: boolean;
+  orientation: Orientation;
 }
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };

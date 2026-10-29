@@ -8,6 +8,8 @@ import type { Viewport } from './viewport';
 const PICK_RADIUS_PX = { mouse: 12, touch: 26 };
 /** Kurven gripes nærmere enn punktene, så prikkene rundt den kan brukes. */
 const CURVE_RADIUS_PX = { mouse: 6, touch: 16 };
+/** Avstand på skjermen fra et kryss der et grenfeste kan gå over på en annen spline. */
+const JUNCTION_PX = { mouse: 22, touch: 34 };
 /** Avstand på skjermen der enden av en spline snapper til en annen spline. */
 const SNAP_RADIUS_PX = 14;
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
@@ -55,6 +57,11 @@ interface Drag {
   snap: SnapTarget | null;
   /** Fra pekeren til det grepne punktet på skjermen, ved starten av draget. */
   grabOffset: THREE.Vector2;
+  /** Grenfestet som dras gjennom spline-nettverket: forelder og andel. */
+  route: { parent: number; at: number } | null;
+  /** Splinene festet kan gå over på i krysset ved pekeren. */
+  routeOptions?: number[];
+  touch: boolean;
 }
 
 /**
@@ -136,7 +143,7 @@ export class SkeletonTool {
     const previous = this.view.selection;
     this.view.select({ spline: pick.spline, index: pick.kind === 'curve' ? null : pick.index });
     this.cb.selectionChanged();
-    this.drag = {
+    const drag: Drag = (this.drag = {
       pointerId: e.pointerId,
       pick,
       startMouse: mouse.clone(),
@@ -152,7 +159,14 @@ export class SkeletonTool {
       bend: null,
       snap: null,
       grabOffset: this.viewport.toScreen(pick.position).sub(this.canvasPoint(mouse)),
-    };
+      route: null,
+      touch,
+    });
+    const ps = this.spline(pick.spline);
+    if (pick.kind === 'anchor' && pick.index === 0 && ps?.parent != null) {
+      drag.route = { parent: ps.parent, at: ps.at };
+      this.view.showRoute(ps.parent);
+    }
     // Bøyen starter i punktet som var valgt før tuppen ble grepet.
     this.bendFrom = previous?.spline === pick.spline ? previous.index : null;
     this.enterMode(this.drag);
@@ -244,7 +258,67 @@ export class SkeletonTool {
     this.step(drag);
   }
 
+  /** Splinen og alle undergrener under den. */
+  private subtree(id: number) {
+    const out = new Set<number>([id]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const s of this.latest) {
+        if (s.parent !== null && out.has(s.parent) && !out.has(s.id)) {
+          out.add(s.id);
+          grew = true;
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Kryssene på splinen `id`: grener som er festet til den, og festet til
+   * dens egen forelder. Grenen som dras og undergrenene dens er utelatt.
+   */
+  private junctions(id: number, exclude: Set<number>) {
+    const s = this.spline(id);
+    if (!s) return [];
+    const out: { spline: number; junction: THREE.Vector3; atOnCurrent: number }[] = [];
+    for (const c of this.latest) {
+      if (c.parent === id && !exclude.has(c.id)) out.push({ spline: c.id, junction: v3(c.anchors[0].position), atOnCurrent: c.at });
+    }
+    if (s.parent !== null && !exclude.has(s.parent)) out.push({ spline: s.parent, junction: v3(s.anchors[0].position), atOnCurrent: 0 });
+    return out;
+  }
+
+  /**
+   * Fører grenfestet langs gjeldende forelder. Nær et kryss kan festet gå
+   * over på en annen spline; pekeren avgjør hvilken vei, som i et veikryss.
+   */
+  private updateRoute(drag: Drag) {
+    const route = drag.route!;
+    const exclude = this.subtree(drag.pick.spline);
+    const near = this.view.nearestOn(route.parent, drag.mouse.x, drag.mouse.y);
+    if (!near) return;
+    route.at = near.at;
+    const limit = drag.touch ? JUNCTION_PX.touch : JUNCTION_PX.mouse;
+    // Kryssene på gjeldende spline nær festet.
+    const nearby = (at: THREE.Vector3) =>
+      this.junctions(route.parent, exclude).filter((j) => this.viewport.toScreen(j.junction).distanceTo(this.viewport.toScreen(at)) < limit);
+    let at = near.position;
+    for (const o of nearby(at)) {
+      const alt = this.view.nearestOn(o.spline, drag.mouse.x, drag.mouse.y);
+      if (alt && alt.d + 2 < near.d) {
+        route.parent = o.spline;
+        route.at = alt.at;
+        at = alt.position;
+        break;
+      }
+    }
+    const shown = nearby(at);
+    this.view.showRoute(route.parent, shown);
+    drag.routeOptions = shown.map((o) => o.spline);
+  }
+
   private step(drag: Drag) {
+    if (drag.route) this.updateRoute(drag);
     if (drag.grip) drag.grip.update(drag.mouse, drag.grip.mode);
     if (drag.bend) drag.bend.drag.update(drag.mouse);
     if (!drag.moved) return;
@@ -294,11 +368,9 @@ export class SkeletonTool {
       current = { kind: 'translate', spline: pick.spline, delta: arr(delta) };
     } else if (pick.kind === 'handle') {
       current = { kind: 'setHandle', spline: pick.spline, index: pick.index, side: pick.side, position: arr(drag.grip!.tip) };
-    } else if (pick.index === 0 && this.spline(pick.spline)?.parent != null) {
-      // Festet dras langs forelderen.
-      const parent = this.spline(pick.spline)!.parent!;
-      const near = this.view.pickCurve(drag.mouse.x, drag.mouse.y, Infinity, parent);
-      current = { kind: 'reattach', spline: pick.spline, at: near ? near.at : this.spline(pick.spline)!.at };
+    } else if (drag.route) {
+      // Festet dras langs forelderen og eventuelt over på en annen spline.
+      current = { kind: 'reattach', spline: pick.spline, at: drag.route.at, parent: drag.route.parent };
     } else if (drag.tip) {
       current = { kind: 'moveTip', spline: pick.spline, position: arr(drag.snap?.position ?? drag.grip!.tip) };
     } else {
@@ -324,7 +396,13 @@ export class SkeletonTool {
     if (drag.mode === 'pull') return 'Trekk ut langs enden';
     if (drag.mode === 'plane') return 'Panorer tuppen (Alt)';
     if (drag.pick.kind === 'handle') return 'Flytt håndtak';
-    return drag.pick.index === 0 && this.spline(drag.pick.spline)?.parent != null ? 'Flytt festet langs forelderen' : 'Flytt punkt';
+    if (drag.route) {
+      const on = this.spline(drag.route.parent);
+      const name = (s: SplineView | null) => (!s ? '' : s.parent === null ? 'hovedsplinen' : s.name || `Gren ${s.id}`);
+      const options = (drag.routeOptions ?? []).map((id) => name(this.spline(id)));
+      return `Flytt festet langs ${name(on)}${options.length ? ` · dra videre inn på ${options.join(' eller ')}` : ''}`;
+    }
+    return 'Flytt punkt';
   }
 
   private requestPreview(edit: SkeletonEdit) {
@@ -381,6 +459,7 @@ export class SkeletonTool {
     this.queued = null;
     this.view.hideBend();
     this.view.showSnap(null);
+    this.view.showRoute(null);
     this.viewport.controls.enabled = true;
     this.viewport.setControlPointsVisible(true);
     const el = this.viewport.renderer.domElement;

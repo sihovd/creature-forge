@@ -459,7 +459,7 @@ pub fn control_points(mesh: &TriMesh, spacing: f64) -> Vec<(Vec3, Vec3)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skeleton::SkeletonEdit as E;
+    use crate::skeleton::{Orientation, SkeletonEdit as E};
     use crate::sphere::icosphere_for_edge;
 
     fn pull_on(doc: &Document, shape: ShapeId, distance: f64) -> Pull {
@@ -656,6 +656,7 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 length: 35.0,
                 thickness: 5.0,
+                orientation: Orientation::FollowParent,
             })
             .unwrap()
             .unwrap();
@@ -683,6 +684,7 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 length: 35.0,
                 thickness: 5.0,
+                orientation: Orientation::FollowParent,
             })
             .unwrap()
             .unwrap();
@@ -770,6 +772,7 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 length: 30.0,
                 thickness: 4.0,
+                orientation: Orientation::FollowParent,
             })
             .is_err());
         assert!(doc.commit_pull(s, pull_on(&doc, s, 5.0)).is_err());
@@ -816,6 +819,7 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 length: 30.0,
                 thickness: 4.0,
+                orientation: Orientation::FollowParent,
             })
             .unwrap()
             .unwrap();

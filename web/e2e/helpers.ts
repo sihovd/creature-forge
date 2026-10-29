@@ -40,3 +40,11 @@ export async function closeLayersOnMobile(page: Page, isMobile: boolean) {
   const toggle = page.locator('#toggle-layers');
   if (isMobile && (await toggle.getAttribute('aria-expanded')) === 'true') await toggle.click();
 }
+
+/** «Ny gren» for valgt spline, og godta foreslått retning med et trykk på retningshåndtaket. */
+export async function newBranch(page: Page) {
+  const before = Number(await viewport(page).getAttribute('data-splines'));
+  await page.getByRole('button', { name: 'Ny gren', exact: true }).click();
+  await page.locator('.axis-free').click();
+  await expect(viewport(page)).toHaveAttribute('data-splines', String(before + 1));
+}
