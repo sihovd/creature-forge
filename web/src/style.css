@@ -463,3 +463,17 @@ body.contour-editing .empty-hint { display: none; }
   .contour-bar { left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none; padding: 6px 8px; font-size: 13px; }
   .contour-tools button { min-height: 40px; padding: 0 8px; font-size: 13px; }
 }
+
+/* Konturregister (trinn 5). */
+.registry { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.registry .tile { position: relative; }
+.registry .tile > button:first-child { display: grid; justify-items: center; gap: 2px; width: 100%; padding: 6px 2px 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; font-size: 11px; color: var(--text); cursor: pointer; }
+.registry .tile > button:first-child:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.registry .tile > button:disabled { opacity: 0.5; cursor: default; }
+.registry .tile svg { width: 32px; height: 32px; }
+.registry .tile polygon { fill: rgb(124 77 255 / 0.12); stroke: #7c4dff; stroke-width: 0.08; stroke-linejoin: round; }
+.registry .tile.volume polygon { fill: rgb(18 163 154 / 0.15); stroke: var(--teal); }
+.registry .tile span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.registry .tile-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.panel .registry-help { margin: 0 0 8px; }
+.panel input.name.wide { width: 100%; }

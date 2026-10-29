@@ -590,6 +590,30 @@ pub enum SkeletonEdit {
         spline: SplineId,
         name: String,
     },
+    /// Erstatter alle konturene på splinen, for eksempel med et volum fra
+    /// registeret (smal hals, større hode og avsmalnende ende).
+    SetStations {
+        spline: SplineId,
+        stations: Vec<Station>,
+    },
+    /// Lagrer omrisset til en kontur i registeret under `name`.
+    SaveProfile {
+        spline: SplineId,
+        station: usize,
+        name: String,
+    },
+    /// Lagrer alle konturene på splinen som et volum i registeret.
+    SaveVolume {
+        spline: SplineId,
+        name: String,
+    },
+    RenameEntry {
+        entry: u32,
+        name: String,
+    },
+    RemoveEntry {
+        entry: u32,
+    },
     /// Skjuler eller låser laget med rotsplinen `spline`. Tillatt også når
     /// laget er låst, så det kan låses opp.
     SetLayer {
@@ -842,6 +866,52 @@ impl Skeleton {
                 self.masters.insert(master, profile.clone());
             }
             E::SetFlatEnd { spline, flat } => self.update(spline, |s| s.flat_end = flat)?,
+            E::SetStations {
+                spline,
+                ref stations,
+            } => {
+                let mut stations = stations.clone();
+                for st in &stations {
+                    st.validate()?;
+                }
+                stations.sort_by(|a, b| a.at.total_cmp(&b.at));
+                self.update(spline, |s| s.profiles = stations)?
+            }
+            E::SaveProfile {
+                spline,
+                station,
+                ref name,
+            } => {
+                let profile = self.station_profile(self.station(spline, station)?)?;
+                self.add_entry(name, vec![Station::new(0.5, profile)], false)?
+            }
+            E::SaveVolume { spline, ref name } => {
+                let stations: Vec<Station> = self
+                    .resolved_profiles(spline)?
+                    .into_iter()
+                    .map(|r| Station {
+                        scale: r.scale,
+                        rotation: r.rotation,
+                        ..Station::new(r.at, r.profile)
+                    })
+                    .collect();
+                if stations.len() < 2 {
+                    return Err("Et volum trenger minst to konturer langs splinen".into());
+                }
+                self.add_entry(name, stations, true)?
+            }
+            E::RenameEntry { entry, ref name } => {
+                let name = valid_name(name)?;
+                self.registry
+                    .get_mut(&entry)
+                    .ok_or("Oppføringen finnes ikke")?
+                    .name = name;
+            }
+            E::RemoveEntry { entry } => {
+                self.registry
+                    .remove(&entry)
+                    .ok_or("Oppføringen finnes ikke")?;
+            }
             E::Rename { spline, ref name } => {
                 let name = name.trim().to_string();
                 self.update(spline, |s| s.name = name)?
@@ -1030,6 +1100,28 @@ pub struct Skeleton {
     /// Masterprofiler som stasjoner kan kobles til.
     #[serde(default)]
     masters: BTreeMap<MasterId, Profile>,
+    /// Konturregisteret: lagrede profiler og volumer brukeren kan gjenbruke.
+    /// En oppføring kopieres når den brukes og kobles ikke varig.
+    #[serde(default)]
+    registry: BTreeMap<u32, RegistryEntry>,
+}
+
+/// En lagret profil (én kontur) eller et volum (flere konturer langs en spline).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegistryEntry {
+    pub name: String,
+    /// Konturene, alltid med eget omriss. Én for en profil; for et volum
+    /// er `at` plassen langs splinen volumet legges på.
+    pub stations: Vec<Station>,
+    pub volume: bool,
+}
+
+/// En oppføring i registeret slik visningen trenger den.
+#[derive(Clone, Debug, Serialize)]
+pub struct RegistryView {
+    pub id: u32,
+    #[serde(flatten)]
+    pub entry: RegistryEntry,
 }
 
 /// Filformatet for et skjelett. Inngår senere i prosjektfilen.
@@ -1049,6 +1141,7 @@ impl Skeleton {
             next_id: 1,
             splines: BTreeMap::new(),
             masters: BTreeMap::new(),
+            registry: BTreeMap::new(),
         }
     }
 
@@ -1425,7 +1518,16 @@ impl Skeleton {
     fn check_unlocked(&self, edit: &SkeletonEdit) -> Result<(), String> {
         use SkeletonEdit as E;
         let target = match *edit {
-            E::AddRoot { .. } | E::Batch { .. } | E::Rename { .. } | E::SetLayer { .. } => None,
+            E::AddRoot { .. }
+            | E::Batch { .. }
+            | E::Rename { .. }
+            | E::SetLayer { .. }
+            | E::RenameEntry { .. }
+            | E::RemoveEntry { .. }
+            // Å lagre en kontur i registeret endrer ikke laget den ligger i.
+            | E::SaveProfile { .. }
+            | E::SaveVolume { .. } => None,
+            E::SetStations { spline, .. } => Some(spline),
             E::AddChild { parent, .. } => Some(parent),
             E::MoveAnchor { spline, .. }
             | E::MoveTip { spline, .. }
@@ -1461,6 +1563,36 @@ impl Skeleton {
             Some(id) if self.is_locked(id) => Err("Laget er låst".into()),
             _ => Ok(()),
         }
+    }
+
+    fn add_entry(
+        &mut self,
+        name: &str,
+        stations: Vec<Station>,
+        volume: bool,
+    ) -> Result<(), String> {
+        let name = valid_name(name)?;
+        let id = self.registry.keys().next_back().map_or(1, |k| k + 1);
+        self.registry.insert(
+            id,
+            RegistryEntry {
+                name,
+                stations,
+                volume,
+            },
+        );
+        Ok(())
+    }
+
+    /// Konturregisteret.
+    pub fn registry(&self) -> Vec<RegistryView> {
+        self.registry
+            .iter()
+            .map(|(id, entry)| RegistryView {
+                id: *id,
+                entry: entry.clone(),
+            })
+            .collect()
     }
 
     pub fn masters(&self) -> &BTreeMap<MasterId, Profile> {
@@ -1535,6 +1667,14 @@ impl Skeleton {
         for m in self.masters.values() {
             m.validate()?;
         }
+        for e in self.registry.values() {
+            for st in &e.stations {
+                st.validate()?;
+                if !matches!(st.shape, ProfileShape::Own { .. }) {
+                    return Err("En oppføring i registeret må ha egne omriss".into());
+                }
+            }
+        }
         self.evaluate().map(|_| ())
     }
 
@@ -1559,6 +1699,14 @@ impl Skeleton {
         file.skeleton.validate()?;
         Ok(file.skeleton)
     }
+}
+
+fn valid_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Oppføringen trenger et navn".into());
+    }
+    Ok(name.chars().take(60).collect())
 }
 
 fn to_local(frame: &Frame, world: &[Anchor]) -> Vec<Anchor> {
@@ -2249,5 +2397,104 @@ mod tests {
         // Lagring og åpning bevarer festet og orienteringen.
         let opened = Skeleton::from_json(&sk.to_json()).unwrap();
         assert_eq!(opened, sk);
+    }
+
+    #[test]
+    fn registeret_lagrer_profiler_og_volumer_som_kopier() {
+        let (mut sk, root, child, _) = three_levels();
+        sk.apply(&SkeletonEdit::Batch {
+            edits: vec![
+                SkeletonEdit::AddProfile {
+                    spline: root,
+                    at: 0.2,
+                    from: None,
+                },
+                SkeletonEdit::SetProfile {
+                    spline: root,
+                    station: 0,
+                    profile: Profile::h_shape(),
+                },
+                SkeletonEdit::AddProfile {
+                    spline: root,
+                    at: 0.8,
+                    from: None,
+                },
+                SkeletonEdit::MakeMaster {
+                    spline: root,
+                    station: 1,
+                },
+            ],
+        })
+        .unwrap();
+        sk.apply(&SkeletonEdit::SaveProfile {
+            spline: root,
+            station: 0,
+            name: " H-profil ".into(),
+        })
+        .unwrap();
+        sk.apply(&SkeletonEdit::SaveVolume {
+            spline: root,
+            name: "Hode".into(),
+        })
+        .unwrap();
+        let reg = sk.registry();
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg[0].entry.name, "H-profil");
+        assert!(!reg[0].entry.volume);
+        assert_eq!(
+            reg[0].entry.stations[0].shape,
+            ProfileShape::Own {
+                profile: Profile::h_shape()
+            }
+        );
+        // Volumet er lagret med egne omriss, ikke masterkobling.
+        assert!(reg[1].entry.volume);
+        assert_eq!(reg[1].entry.stations.len(), 2);
+        assert!(reg[1]
+            .entry
+            .stations
+            .iter()
+            .all(|st| matches!(st.shape, ProfileShape::Own { .. })));
+        // Bruk volumet på en annen spline: konturene kopieres.
+        sk.apply(&SkeletonEdit::SetStations {
+            spline: child,
+            stations: reg[1].entry.stations.clone(),
+        })
+        .unwrap();
+        assert_eq!(sk.spline(child).unwrap().profiles.len(), 2);
+        // En senere masterendring påvirker ikke kopien.
+        sk.apply(&SkeletonEdit::SetMaster {
+            master: 1,
+            profile: Profile::ellipse(1.0, 0.3),
+        })
+        .unwrap();
+        assert_ne!(
+            sk.resolved_profiles(child).unwrap()[1].profile,
+            Profile::ellipse(1.0, 0.3)
+        );
+        // Navn, sletting og lagring.
+        sk.apply(&SkeletonEdit::RenameEntry {
+            entry: reg[1].id,
+            name: "Hode 2".into(),
+        })
+        .unwrap();
+        assert!(sk
+            .apply(&SkeletonEdit::RenameEntry {
+                entry: reg[1].id,
+                name: "  ".into()
+            })
+            .is_err());
+        let opened = Skeleton::from_json(&sk.to_json()).unwrap();
+        assert_eq!(opened.registry()[1].entry.name, "Hode 2");
+        sk.apply(&SkeletonEdit::RemoveEntry { entry: reg[0].id })
+            .unwrap();
+        assert_eq!(sk.registry().len(), 1);
+        // Et volum trenger minst to konturer.
+        assert!(sk
+            .apply(&SkeletonEdit::SaveVolume {
+                spline: 3,
+                name: "x".into()
+            })
+            .is_err());
     }
 }

@@ -1,6 +1,7 @@
 import { AxisGizmo } from './axis-gizmo';
 import { ContextMenu, type MenuItem } from './context-menu';
 import { ContourMode } from './contour-mode';
+import { ContourRegistry } from './contour-registry';
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
 import type { Command, GeometryResult, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
@@ -76,6 +77,7 @@ function apply(result: GeometryResult) {
     return;
   }
   skeleton.set(result.skeleton);
+  if (registry) registry.entries = result.registry;
   if (result.created !== null) skeleton.select({ spline: result.created, index: null });
   syncLayers();
   updateSkeletonPanel();
@@ -152,6 +154,7 @@ function updateSkeletonPanel() {
   orientKeep.setAttribute('aria-pressed', String(spline?.orientation === 'keep_direction'));
   profiles?.update();
   contourMode?.update();
+  registry?.update();
   editContour.disabled = !(sel?.station != null && spline && !spline.locked);
   updateInspector();
   layers?.render();
@@ -318,6 +321,11 @@ function newSplineAt(origin: THREE.Vector3) {
     ),
   );
 }
+
+const registry: ContourRegistry = new ContourRegistry(skeleton, profiles, {
+  commit: (edit, what) => editSkeleton(edit, what),
+  status: (text) => (status.textContent = text),
+});
 
 addSpline.addEventListener('click', () => {
   const rect = container.getBoundingClientRect();

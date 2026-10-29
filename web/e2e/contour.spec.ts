@@ -24,7 +24,7 @@ test('kontur: ny kontur, H-form, kopier og lim inn, og master', async ({ page })
   // Ny kontur er en sirkel med fire punkter.
   await expect(editor(page)).toHaveAttribute('data-points', '4');
 
-  await page.locator('#profile-preset').selectOption('H');
+  await page.locator('#registry [data-key="p:H"] > button').click();
   await expect(status(page)).toContainText('Kontur: H');
   await expect(editor(page)).toHaveAttribute('data-points', '12');
 

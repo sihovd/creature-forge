@@ -45,6 +45,11 @@ export type SkeletonEdit =
   | { kind: 'setMaster'; master: number; profile: Profile }
   | { kind: 'setFlatEnd'; spline: number; flat: boolean }
   | { kind: 'rename'; spline: number; name: string }
+  | { kind: 'setStations'; spline: number; stations: Station[] }
+  | { kind: 'saveProfile'; spline: number; station: number; name: string }
+  | { kind: 'saveVolume'; spline: number; name: string }
+  | { kind: 'renameEntry'; entry: number; name: string }
+  | { kind: 'removeEntry'; entry: number }
   | { kind: 'setLayer'; spline: number; hidden: boolean; locked: boolean }
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
@@ -66,6 +71,22 @@ export interface ProfilePoint {
 /** Lukket omriss i tverrsnittsplanet, i enheter av splinens tykkelse (sirkel = radius 1). */
 export interface Profile {
   points: ProfilePoint[];
+}
+
+/** En kontur slik den lagres i kjernen: plass, omriss (eget eller master), størrelse og rotasjon. */
+export interface Station {
+  at: number;
+  shape: { kind: 'own'; profile: Profile } | { kind: 'master'; master: number };
+  scale: number;
+  rotation: number;
+}
+
+/** En oppføring i konturregisteret: én profil, eller et volum med flere konturer. */
+export interface RegistryEntry {
+  id: number;
+  name: string;
+  stations: Station[];
+  volume: boolean;
 }
 
 /** En tverrsnittsprofil på et sted langs splinen. */
@@ -139,7 +160,7 @@ export interface DocumentState {
 }
 
 export type GeometryResult =
-  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; created: number | null }
+  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; registry: RegistryEntry[]; created: number | null }
   | { kind: 'preview'; shape: number; mesh: MeshResult }
   | { kind: 'project'; text: string }
   | { kind: 'skeletonPreview'; skeleton: SplineView[]; shapes: { shape: number; mesh: MeshResult | null }[] };

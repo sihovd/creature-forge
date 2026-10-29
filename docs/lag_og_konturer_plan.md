@@ -39,7 +39,7 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 | 2 | Lagliste, objektvalg, skjul og lås, aksekors for ny spline, Bézier-innsetting, langtrykk, lagring og åpning, fjerne «Legg til kule» | Gjort, se under |
 | 3 | Orienteringsvalg for grener, «Ny gren» med retningshåndtak, flytting av festet gjennom spline-nettverket | Gjort, se under |
 | 4 | «Ny kontur» der brukeren trykker, flytting langs splinen, konturredigering på modellen | Gjort, se under |
-| 5 | Konturregister, presets (sirkel, ellipse, egg, trekant), volumpreset, masterkobling | Ikke startet |
+| 5 | Konturregister, presets (sirkel, ellipse, egg, trekant), volumpreset, masterkobling | Gjort, se under |
 | 6 | Stabilisering før Surface Pen, Surface Brush og mirror | Ikke startet |
 
 ## 3 Trinn 2: lag og grunnrettinger
@@ -69,7 +69,14 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 - **Kamera i modusen:** zoom og panorering virker, rotasjon er slått av så planet står vinkelrett. «Ferdig» eller Esc setter kameraet tilbake der det var. Skjelett, prikker og andre verktøy er inaktive så lenge modusen er åpen. På små skjermer skjules panelet, og verktøylinjen for konturen ligger nederst.
 - **Masterkobling:** en koblet kontur redigeres gjennom masteren, og verktøylinjen viser «endrer masteren Mn og N konturer» med «Gjør individuell» ved siden av. Registeret og presetene kommer i trinn 5.
 
-## 6 Videre retning som ikke implementeres nå
+## 6 Trinn 5: konturregister, presets og masterprofiler
+
+- **Registeret** ligger i skjelettet (`Skeleton::registry`) og lagres derfor i prosjektfilen og angres som andre endringer. En oppføring er enten én profil eller et volum (flere konturer med plass, størrelse og rotasjon langs splinen), alltid med egne omriss. «Lagre kontur» lagrer valgt kontur under et navn, og «Lagre volum» lagrer alle konturene på splinen. Oppføringer kan slettes. Registeret følger prosjektet, ikke nettleseren; et felles bibliotek på tvers av prosjekter er ikke laget.
+- **Startpresets:** Sirkel, Ellipse, Egg og Trekant, i tillegg til Kvadrat og H fra før. Volumpresets: «Hode» (smal hals, større hodeparti med eggform og avsmalnende ende, fem konturer) og «Kule» (fem konturer som vokser og avtar etter splinens lengde). Alt bruker kontursystemet; det finnes ingen egne primitive meshobjekter.
+- **Bruk:** en profil erstatter omrisset til valgt kontur, eller legges til som ny kontur når bare splinen er valgt. Et volum erstatter alle konturene på splinen (`SetStations`). Begge deler kopieres og kobles ikke varig, også når en koblet kontur får et preset (den blir individuell, masteren endres ikke).
+- **Master:** «Gjør til master», «Koble til master» og «Rediger master» i panelet som før. En koblet kontur har eget omriss fra masteren, men egen størrelse, rotasjon og plass. Panelet og verktøylinjen i «Rediger kontur» viser hvor mange konturer en masterendring påvirker, og «Gjør individuell» bryter koblingen og beholder formen.
+
+## 7 Videre retning som ikke implementeres nå
 
 ### Surface Pen og Surface Brush
 

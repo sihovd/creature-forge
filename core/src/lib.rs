@@ -168,6 +168,13 @@ impl JsDocument {
         view_json(self.0.skeleton())
     }
 
+    /// Konturregisteret som JSON (se `skeleton::RegistryView`).
+    #[wasm_bindgen(js_name = registryView)]
+    pub fn registry_view(&self) -> Result<String, JsError> {
+        serde_json::to_string(&self.0.skeleton().registry())
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Visningen av skjelettet med en redigering som ikke lagres. Meshene
     /// til de berørte kroppene hentes etterpå med `previewShapes` og
     /// `previewMesh`.

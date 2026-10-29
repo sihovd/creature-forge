@@ -185,7 +185,7 @@ test('lagre og åpne prosjektet bevarer lag, navn, grener og konturer', async ({
   const branch = await anchorsWorld(page, 2);
 
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Lagre' }).click();
+  await page.getByRole('button', { name: 'Lagre', exact: true }).click();
   const file = await (await download).path();
   expect((await download).suggestedFilename()).toBe('skapning.cfproj');
 

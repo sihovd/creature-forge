@@ -75,7 +75,7 @@ test.describe('med mus', () => {
 
   test('«Rediger kontur» på modellen: vinkelrett kamera, konkav H, punkter, zoom og Ferdig', async ({ page }) => {
     await withContour(page);
-    await page.locator('#profile-preset').selectOption('H');
+    await page.locator('#registry [data-key="p:H"] > button').click();
     await expect(status(page)).toContainText('Kontur: H');
     const before = await camera(page);
     await openEditor(page);
