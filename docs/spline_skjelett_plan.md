@@ -45,9 +45,11 @@ Issue #4 og Siverts avklaring 28. oktober 2026 er nyere enn spesifikasjonen kapi
 
 ### Videre profilredigering
 
-**Trinn 5: Profiler som data.** Lukkede 2D-Bézier-profiler, master og forekomster med egen størrelse, rotasjon og posisjon. Gjør til master, koble til, gjør individuell (beholder gjeldende form). Kopier og lim inn langs senterlinjen. Overgang mellom naboprofiler med samplet korrespondanse og valgt startpunkt som gir minst vridning.
+*Status 29. oktober 2026 (etter Siverts ønske om konturredigering, høyreklikk og snap):* konturer langs splinen er gjort i kjernen (`core/src/profile.rs`) og i appen (konturpanelet og konturfeltet). Avstandsfeltet bruker omrisset i hvert tverrsnitt, så konkave profiler som H gir innhakk. Endene er avrundet (profilen krymper som en halvkule) eller flate med hele endeprofilen («Flat ende»). Uttrekk med prikkene følger formen. Grip kurven til en rotspline for å flytte hele formen; et punkt som dras nær en annen spline, snapper dit. Høyreklikk gir hurtigvalg. Gjenstår: lagring til fil i appen og fysisk prøving.
 
-**Trinn 6: Profileditor i grensesnittet.** Tegne nytt omriss, legge til punkter, hjørner og håndtak, konkave profiler som H. Tydelig skille mellom senterlinjeredigering og tverrsnittsredigering, og en eksplisitt handling for å redigere masteren.
+**Trinn 5: Profiler som data.** *Status:* gjort. Lukkede 2D-Bézier-profiler, master og forekomster med egen størrelse, rotasjon og posisjon. Gjør til master, koble til, gjør individuell (beholder gjeldende form). Kopier og lim inn langs senterlinjen. Overgang mellom naboprofiler med samplet korrespondanse og valgt startpunkt som gir minst vridning.
+
+**Trinn 6: Profileditor i grensesnittet.** *Status:* gjort; tegning er punktvis med hjørnepunkter, og håndtak legges til ved å gjøre punktet mykt. Tegne nytt omriss, legge til punkter, hjørner og håndtak, konkave profiler som H. Tydelig skille mellom senterlinjeredigering og tverrsnittsredigering, og en eksplisitt handling for å redigere masteren.
 
 Surface tools er et eget verktøysystem og inngår ikke.
 

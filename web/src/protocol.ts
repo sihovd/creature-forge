@@ -29,11 +29,47 @@ export type SkeletonEdit =
   | { kind: 'extend'; spline: number; delta: number }
   | { kind: 'bend'; spline: number; from: number; direction: Vec3; angle: number; radius: number }
   | { kind: 'reattach'; spline: number; at: number }
+  | { kind: 'translate'; spline: number; delta: Vec3 }
   | { kind: 'setThickness'; spline: number; thickness: number }
   | { kind: 'remove'; spline: number }
+  | { kind: 'addProfile'; spline: number; at: number; from: number | null }
+  | { kind: 'setProfile'; spline: number; station: number; profile: Profile }
+  | { kind: 'setStation'; spline: number; station: number; at: number; scale: number; rotation: number }
+  | { kind: 'removeProfile'; spline: number; station: number }
+  | { kind: 'makeMaster'; spline: number; station: number }
+  | { kind: 'linkMaster'; spline: number; station: number; master: number }
+  | { kind: 'unlink'; spline: number; station: number }
+  | { kind: 'setMaster'; master: number; profile: Profile }
+  | { kind: 'setFlatEnd'; spline: number; flat: boolean }
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
 export type AnchorKind = 'smooth' | 'corner';
+
+export type Vec2 = [number, number];
+
+/** Et punkt i et tverrsnittsomriss. Håndtakene er forskyvninger fra punktet. */
+export interface ProfilePoint {
+  position: Vec2;
+  handle_in: Vec2;
+  handle_out: Vec2;
+  kind: AnchorKind;
+}
+
+/** Lukket omriss i tverrsnittsplanet, i enheter av splinens tykkelse (sirkel = radius 1). */
+export interface Profile {
+  points: ProfilePoint[];
+}
+
+/** En tverrsnittsprofil på et sted langs splinen. */
+export interface StationView {
+  at: number;
+  scale: number;
+  rotation: number;
+  master: number | null;
+  profile: Profile;
+  /** Omrisset rundt kurven i verdenskoordinater. */
+  ring: Vec3[];
+}
 
 export interface AnchorView {
   position: Vec3;
@@ -55,6 +91,8 @@ export interface SplineView {
   length: number;
   points: Vec3[];
   anchors: AnchorView[];
+  profiles: StationView[];
+  flat_end: boolean;
 }
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };

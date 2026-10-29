@@ -2,10 +2,14 @@ import * as THREE from 'three';
 import { GripDrag } from './grip-math';
 import type { SkeletonEdit, SplineView, Vec3 } from './protocol';
 import { BendDrag } from './skeleton-math';
-import type { SkeletonPick, SkeletonView } from './skeleton-view';
+import type { SkeletonPick, SkeletonView, SnapTarget } from './skeleton-view';
 import type { Viewport } from './viewport';
 
 const PICK_RADIUS_PX = { mouse: 12, touch: 26 };
+/** Kurven gripes nærmere enn punktene, så prikkene rundt den kan brukes. */
+const CURVE_RADIUS_PX = { mouse: 6, touch: 16 };
+/** Avstand på skjermen der enden av en spline snapper til en annen spline. */
+const SNAP_RADIUS_PX = 14;
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 const arr = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
 const deg = (rad: number) => THREE.MathUtils.radToDeg(rad).toFixed(0);
@@ -23,9 +27,12 @@ export interface SkeletonToolCallbacks {
 
 type TipMode = 'pull' | 'plane' | 'bend';
 
+/** Hele formen flyttes ved å gripe kurven til en rotspline. */
+type CurvePick = { kind: 'curve'; spline: number; index: number; position: THREE.Vector3 };
+
 interface Drag {
   pointerId: number;
-  pick: SkeletonPick;
+  pick: SkeletonPick | CurvePick;
   startMouse: THREE.Vector2;
   mouse: THREE.Vector2;
   moved: boolean;
@@ -39,6 +46,10 @@ interface Drag {
   mode: TipMode | 'free';
   grip: GripDrag | null;
   bend: { drag: BendDrag; from: number; start: THREE.Vector3 } | null;
+  /** Punktet på en annen spline som enden snapper til. */
+  snap: SnapTarget | null;
+  /** Fra pekeren til det grepne punktet på skjermen, ved starten av draget. */
+  grabOffset: THREE.Vector2;
 }
 
 /**
@@ -47,8 +58,10 @@ interface Drag {
  * den i planet vinkelrett på enderetningen, og Alt + Shift bøyer resten av
  * splinen fra valgt punkt med låst buelengde. Under bøying stiller scroll
  * radien og Ctrl snapper vinkelen til 15°. Festet til en gren dras langs
- * forelderen. Dobbeltklikk på en kurve legger inn et nytt punkt. Hvert drag
- * er ett angresteg, og Esc avbryter.
+ * forelderen. Dobbeltklikk på en kurve legger inn et nytt punkt. Grip
+ * kurven til en rotspline for å flytte hele formen. Når et punkt eller
+ * tuppen dras nær en annen spline, snapper det dit (Shift slår av snapping).
+ * Hvert drag er ett angresteg, og Esc avbryter.
  */
 export class SkeletonTool {
   private drag: Drag | null = null;
@@ -80,8 +93,15 @@ export class SkeletonTool {
 
   private onDown(e: PointerEvent) {
     if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement) return;
-    const px = e.pointerType === 'touch' ? PICK_RADIUS_PX.touch : PICK_RADIUS_PX.mouse;
-    const pick = this.view.pick(e.clientX, e.clientY, px);
+    const touch = e.pointerType === 'touch';
+    const px = touch ? PICK_RADIUS_PX.touch : PICK_RADIUS_PX.mouse;
+    let pick: SkeletonPick | CurvePick | null = this.view.pick(e.clientX, e.clientY, px);
+    if (!pick) {
+      const near = this.view.pickCurve(e.clientX, e.clientY, touch ? CURVE_RADIUS_PX.touch : CURVE_RADIUS_PX.mouse);
+      if (near && this.view.spline(near.spline)?.parent === null) {
+        pick = { kind: 'curve', spline: near.spline, index: -1, position: near.position };
+      }
+    }
     if (!pick) return;
     // Skjelettet ligger oppå formene og har forrang foran formgrep og kamera.
     e.stopImmediatePropagation();
@@ -92,7 +112,7 @@ export class SkeletonTool {
     this.latest = this.view.splines;
     const mouse = new THREE.Vector2(e.clientX, e.clientY);
     const previous = this.view.selection;
-    this.view.select({ spline: pick.spline, index: pick.index });
+    this.view.select({ spline: pick.spline, index: pick.kind === 'curve' ? null : pick.index });
     this.cb.selectionChanged();
     this.drag = {
       pointerId: e.pointerId,
@@ -108,6 +128,8 @@ export class SkeletonTool {
       mode: 'free',
       grip: null,
       bend: null,
+      snap: null,
+      grabOffset: this.viewport.toScreen(pick.position).sub(this.canvasPoint(mouse)),
     };
     // Bøyen starter i punktet som var valgt før tuppen ble grepet.
     this.bendFrom = previous?.spline === pick.spline ? previous.index : null;
@@ -116,7 +138,7 @@ export class SkeletonTool {
 
   private bendFrom: number | null = null;
 
-  private isTip(pick: SkeletonPick) {
+  private isTip(pick: SkeletonPick | CurvePick) {
     const s = this.spline(pick.spline);
     return pick.kind === 'anchor' && !!s && pick.index === s.anchors.length - 1;
   }
@@ -204,8 +226,38 @@ export class SkeletonTool {
     if (drag.grip) drag.grip.update(drag.mouse, drag.grip.mode);
     if (drag.bend) drag.bend.drag.update(drag.mouse);
     if (!drag.moved) return;
+    drag.snap = this.findSnap(drag);
+    this.view.showSnap(drag.snap);
     this.cb.status(this.describe(drag) + ' · Esc avbryter');
     this.requestPreview(this.edit(drag, true));
+  }
+
+  private canvasPoint(client: THREE.Vector2) {
+    const rect = this.viewport.renderer.domElement.getBoundingClientRect();
+    return new THREE.Vector2(client.x - rect.left, client.y - rect.top);
+  }
+
+  /**
+   * Et punkt eller tuppen som dras, snapper til andre spliner. Målet finnes
+   * fra pekeren, siden det er der brukeren ser, og grepet følger etter.
+   */
+  private findSnap(drag: Drag): SnapTarget | null {
+    const { pick } = drag;
+    if (!drag.grip || drag.shift || pick.kind !== 'anchor') return null;
+    if (pick.index === 0 && this.spline(pick.spline)?.parent != null) return null;
+    // Splinen selv og grenene på den kan ikke være mål.
+    const exclude = new Set<number>([pick.spline]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const s of this.latest) {
+        if (s.parent !== null && exclude.has(s.parent) && !exclude.has(s.id)) {
+          exclude.add(s.id);
+          grew = true;
+        }
+      }
+    }
+    const screen = this.canvasPoint(drag.mouse).add(drag.grabOffset);
+    return this.view.snapTarget(screen, SNAP_RADIUS_PX, exclude);
   }
 
   /** Redigeringen for hele draget så langt. */
@@ -215,6 +267,9 @@ export class SkeletonTool {
     if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       current = { kind: 'bend', spline: pick.spline, from: drag.bend.from, direction: arr(b.direction), angle: b.angle, radius: b.radius };
+    } else if (pick.kind === 'curve') {
+      const delta = drag.grip!.tip.clone().sub(pick.position);
+      current = { kind: 'translate', spline: pick.spline, delta: arr(delta) };
     } else if (pick.kind === 'handle') {
       current = { kind: 'setHandle', spline: pick.spline, index: pick.index, side: pick.side, position: arr(drag.grip!.tip) };
     } else if (pick.index === 0 && this.spline(pick.spline)?.parent != null) {
@@ -223,15 +278,21 @@ export class SkeletonTool {
       const near = this.view.pickCurve(drag.mouse.x, drag.mouse.y, Infinity, parent);
       current = { kind: 'reattach', spline: pick.spline, at: near ? near.at : this.spline(pick.spline)!.at };
     } else if (drag.tip) {
-      current = { kind: 'moveTip', spline: pick.spline, position: arr(drag.grip!.tip) };
+      current = { kind: 'moveTip', spline: pick.spline, position: arr(drag.snap?.position ?? drag.grip!.tip) };
     } else {
-      current = { kind: 'moveAnchor', spline: pick.spline, index: pick.index, position: arr(drag.grip!.tip) };
+      current = { kind: 'moveAnchor', spline: pick.spline, index: pick.index, position: arr(drag.snap?.position ?? drag.grip!.tip) };
     }
     if (!all || drag.frozen.length === 0) return current;
     return { kind: 'batch', edits: [...drag.frozen, current] };
   }
 
   private describe(drag: Drag) {
+    const snap = drag.snap ? ` · snapper til spline ${drag.snap.spline} (Shift slår av)` : '';
+    return this.describeMove(drag) + snap;
+  }
+
+  private describeMove(drag: Drag) {
+    if (drag.pick.kind === 'curve') return 'Flytt hele formen';
     if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       const snap = drag.ctrl ? ' (snapper 15°)' : '';
@@ -297,6 +358,7 @@ export class SkeletonTool {
     this.drag = null;
     this.queued = null;
     this.view.hideBend();
+    this.view.showSnap(null);
     this.viewport.controls.enabled = true;
     this.viewport.setControlPointsVisible(true);
     const el = this.viewport.renderer.domElement;

@@ -6,12 +6,13 @@
 //! kroppens mesh genereres rundt splinene (se `surface`). En kule er en kort
 //! spline med kulens radius som tykkelse. Uttrekk og innpressing med
 //! kontrollpunktene deformerer meshen direkte og lager ingen spliner. De
-//! spilles av på nytt oppå meshen når skjelettet endres. Hvert ferdig drag
-//! er én operasjon og dermed ett angresteg.
+//! lagres i rammen til nærmeste spline og spilles av på nytt oppå meshen
+//! når skjelettet endres, så de følger med når formen flyttes eller bøyes.
+//! Hvert ferdig drag er én operasjon og dermed ett angresteg.
 
 use crate::mesh::{length, normalize, sub, TriMesh, Vec3};
 use crate::pull::{apply_pull, Pull};
-use crate::skeleton::{Skeleton, SkeletonEdit, SplineId};
+use crate::skeleton::{bezier_point, Skeleton, SkeletonEdit, SplineId};
 use crate::surface::body_mesh;
 use std::collections::HashMap;
 
@@ -27,11 +28,82 @@ pub const SKELETON_SHAPE: ShapeId = 0;
 /// Lengden på splinen i midten av en ny kule, i mm.
 pub const SPHERE_SPLINE_LENGTH: f64 = 0.5;
 
+/// Et uttrekk lagret i rammen til en spline i kroppen. Grepet, normalen og
+/// endepunktet er lokale koordinater i rammen i andelen `at` av splinens
+/// buelengde, så uttrekket følger når splinen flyttes, bøyes eller endres.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoundPull {
+    pub spline: SplineId,
+    pub at: f64,
+    pub anchor: Vec3,
+    pub normal: Vec3,
+    pub tip: Vec3,
+    pub radius: f64,
+    /// Splinens tykkelse da uttrekket ble gjort.
+    pub thickness: f64,
+}
+
+/// Punkter per segment når nærmeste spline til et grep finnes.
+const BIND_POINTS_PER_SEGMENT: usize = 24;
+
+impl BoundPull {
+    /// Knytter et uttrekk til splinen i kroppen `root` som ligger nærmest
+    /// grepets overflate.
+    pub fn bind(skeleton: &Skeleton, root: SplineId, pull: &Pull) -> Result<BoundPull, String> {
+        let mut best: Option<(f64, SplineId, f64)> = None;
+        for id in skeleton.descendants(root) {
+            let w = skeleton.world_spline(id)?;
+            let thickness = skeleton.spline(id).map_or(0.0, |s| s.thickness);
+            let n = w.segments.len() * BIND_POINTS_PER_SEGMENT;
+            for i in 0..=n {
+                let u = i as f64 / n as f64;
+                let k = (i / BIND_POINTS_PER_SEGMENT).min(w.segments.len() - 1);
+                let t = (i - k * BIND_POINTS_PER_SEGMENT) as f64 / BIND_POINTS_PER_SEGMENT as f64;
+                let d = length(sub(pull.anchor, bezier_point(&w.segments[k], t))) - thickness;
+                if best.is_none_or(|b| d < b.0) {
+                    best = Some((d, id, u));
+                }
+            }
+        }
+        let (_, spline, approx) = best.ok_or("Kroppen har ingen spline")?;
+        // Andelen er bare et referansepunkt; buelengdeandelen gjøres eksakt
+        // av rammen selv, så samme andel gir samme ramme ved avspilling.
+        let at = approx.clamp(0.0, 1.0);
+        let frame = skeleton.world_spline(spline)?.frame_at(at);
+        Ok(BoundPull {
+            spline,
+            at,
+            anchor: frame.to_local(pull.anchor),
+            normal: frame.dir_to_local(pull.normal),
+            tip: frame.to_local(pull.tip),
+            radius: pull.radius,
+            thickness: skeleton.spline(spline).map_or(0.0, |s| s.thickness),
+        })
+    }
+
+    /// Uttrekket i verdenskoordinater for skjelettet slik det er nå, eller
+    /// `None` når splinen er fjernet. Endret tykkelse flytter grepet langs
+    /// normalen, så uttrekket blir like langt fra den nye overflaten.
+    pub fn resolve(&self, skeleton: &Skeleton) -> Option<Pull> {
+        let spline = skeleton.spline(self.spline)?;
+        let frame = skeleton.world_spline(self.spline).ok()?.frame_at(self.at);
+        let shift = crate::curve::scale(self.normal, spline.thickness - self.thickness);
+        let anchor = crate::curve::add(self.anchor, shift);
+        let tip = crate::curve::add(self.tip, shift);
+        Some(Pull {
+            anchor: frame.to_world(anchor),
+            normal: normalize(frame.dir_to_world(self.normal)),
+            tip: frame.to_world(tip),
+            radius: self.radius,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Operation {
     Pull {
         shape: ShapeId,
-        pull: Pull,
+        pull: BoundPull,
     },
     /// Skjelettet etter en redigering. Hele tilstanden lagres, så angre
     /// gjenoppretter forrige skjelett nøyaktig.
@@ -164,7 +236,12 @@ impl Document {
 
     /// Uttrekk eller innpressing med et kontrollpunkt. Lager ingen spline.
     pub fn commit_pull(&mut self, shape: ShapeId, pull: Pull) -> Result<(), String> {
-        let mesh = self.preview_pull(shape, &pull)?;
+        pull.validate()?;
+        let bound = BoundPull::bind(&self.skeleton, shape, &pull)?;
+        // Bruk uttrekket slik det spilles av, så angre og gjør om gir samme mesh.
+        let resolved = bound.resolve(&self.skeleton).ok_or("Ukjent form")?;
+        let mesh = self.preview_pull(shape, &resolved)?;
+        let pull = bound;
         self.meshes.insert(shape, mesh);
         self.history.push(Operation::Pull { shape, pull });
         self.redo.clear();
@@ -228,7 +305,9 @@ impl Document {
         for op in &self.history[..upto] {
             if let Operation::Pull { shape, pull } = op {
                 if *shape == root {
-                    mesh = apply_pull(&mesh, pull, self.target_edge)?;
+                    if let Some(p) = pull.resolve(skeleton) {
+                        mesh = apply_pull(&mesh, &p, self.target_edge)?;
+                    }
                 }
             }
         }
@@ -412,6 +491,69 @@ mod tests {
         assert!((doc.mesh(s).unwrap().signed_volume() - pulled).abs() < 1e-6);
         doc.redo();
         assert_eq!(doc.mesh(s).unwrap().positions, with_pull.positions);
+    }
+
+    #[test]
+    fn uttrekkene_folger_formen_naar_den_flyttes_og_boeyes() {
+        let mut doc = Document::new(2.0);
+        let s = doc.add_sphere([0.0, 25.0, 0.0], 20.0).unwrap();
+        // Uttrekk rett ut til siden (+x) på kula.
+        let side = [20.0, 25.25, 0.0];
+        doc.commit_pull(s, Pull::straight(side, [1.0, 0.0, 0.0], 15.0, 10.0))
+            .unwrap();
+        let tip_x = |m: &TriMesh| m.positions.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
+        let before = doc.mesh(s).unwrap().clone();
+        assert!((tip_x(&before) - 35.0).abs() < 1.5, "{}", tip_x(&before));
+
+        // Flytt hele formen 30 mm i z: uttrekket følger med.
+        let w = doc.skeleton().world_spline(s).unwrap();
+        let moved: Vec<_> = w
+            .anchors
+            .iter()
+            .map(|a| [a.position[0], a.position[1], a.position[2] + 30.0])
+            .collect();
+        doc.commit_skeleton(&E::Batch {
+            edits: moved
+                .iter()
+                .enumerate()
+                .map(|(index, position)| E::MoveAnchor {
+                    spline: s,
+                    index,
+                    position: *position,
+                })
+                .collect(),
+        })
+        .unwrap();
+        let after = doc.mesh(s).unwrap();
+        let bbox = |m: &TriMesh| {
+            let mut lo = [f64::MAX; 3];
+            let mut hi = [f64::MIN; 3];
+            for p in &m.positions {
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+            }
+            (lo, hi)
+        };
+        let ((lo0, hi0), (lo1, hi1)) = (bbox(&before), bbox(after));
+        for a in 0..3 {
+            let shift = if a == 2 { 30.0 } else { 0.0 };
+            assert!((lo1[a] - lo0[a] - shift).abs() < 0.5, "{a}");
+            assert!((hi1[a] - hi0[a] - shift).abs() < 0.5, "{a}");
+        }
+        assert!(
+            (after.signed_volume() - before.signed_volume()).abs() / before.signed_volume() < 0.01
+        );
+
+        // Tykkere spline: uttrekket står like langt ut fra den nye overflaten.
+        doc.commit_skeleton(&E::SetThickness {
+            spline: s,
+            thickness: 25.0,
+        })
+        .unwrap();
+        let m = doc.mesh(s).unwrap();
+        assert!((tip_x(m) - 40.0).abs() < 1.5, "{}", tip_x(m));
     }
 
     #[test]

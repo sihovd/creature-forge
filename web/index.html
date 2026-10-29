@@ -42,7 +42,53 @@
           Tykkelse
           <span class="field"><input id="thickness" type="number" min="0.5" max="50" step="0.5" value="5" inputmode="decimal" /> mm</span>
         </label>
-        <p class="help">Alle former har en spline i midten med mesh rundt, også kula. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Dobbeltklikk på kurven for å legge inn et punkt, for eksempel for å bøye videre etter 180°. Grenenes feste dras langs forelderen.</p>
+        <label class="check"><input id="flat-end" type="checkbox" disabled /> Flat ende (hel endeprofil)</label>
+        <h2 class="section">Kontur</h2>
+        <div class="row">
+          <select id="station-select" aria-label="Valgt kontur" disabled></select>
+          <button id="add-profile" type="button" title="Ny kontur (tverrsnitt) på valgt punkt eller midt på splinen" disabled>Ny kontur</button>
+        </div>
+        <div id="profile-editor" class="profile-editor"></div>
+        <div class="row">
+          <select id="profile-preset" aria-label="Erstatt med ferdig form" disabled>
+            <option value="">Form …</option>
+          </select>
+          <button id="draw-profile" type="button" title="Tegn et nytt lukket omriss som erstatter konturen" disabled>Tegn nytt</button>
+        </div>
+        <div class="row">
+          <button id="point-kind" type="button" title="Bytt mellom mykt punkt og hjørnepunkt i konturen" disabled>Hjørnepunkt</button>
+          <button id="remove-point" type="button" title="Slett valgt konturpunkt" disabled>Slett punkt</button>
+        </div>
+        <label>
+          Plass
+          <span class="field"><input id="station-at" type="number" min="0" max="100" step="1" value="50" disabled /> %</span>
+        </label>
+        <label>
+          Størrelse
+          <span class="field"><input id="station-scale" type="number" min="5" max="500" step="5" value="100" disabled /> %</span>
+        </label>
+        <label>
+          Rotasjon
+          <span class="field"><input id="station-rotation" type="number" min="-360" max="360" step="5" value="0" disabled /> °</span>
+        </label>
+        <div class="row">
+          <button id="copy-profile" type="button" title="Kopier konturen" disabled>Kopier</button>
+          <button id="paste-profile" type="button" title="Lim inn konturen på valgt punkt eller midt på splinen" disabled>Lim inn</button>
+          <button id="remove-profile" type="button" title="Slett konturen" disabled>Slett</button>
+        </div>
+        <p id="master-info" class="help master-info">Konturen er individuell.</p>
+        <div class="row">
+          <button id="make-master" type="button" title="Gjør omrisset til en master som andre konturer kan kobles til" disabled>Gjør til master</button>
+          <button id="unlink" type="button" title="Koble fra masteren og behold formen" disabled>Gjør individuell</button>
+        </div>
+        <div class="row">
+          <select id="link-master" aria-label="Koble til master" disabled>
+            <option value="">Koble til master …</option>
+          </select>
+        </div>
+        <label class="check"><input id="edit-master" type="checkbox" disabled /> Rediger master (endrer alle koblede)</label>
+        <p class="help">Konturen er tverrsnittet rundt splinen, tegnet med U mot høyre og V opp. Dra punkter og håndtak, dobbeltklikk på omrisset for et nytt punkt. Mellom to konturer går formen jevnt over. Høyreklikk i arbeidsflaten for hurtigvalg.</p>
+        <p class="help">Alle former har en spline i midten med mesh rundt, også kula. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Dobbeltklikk på kurven for å legge inn et punkt, for eksempel for å bøye videre etter 180°. Grenenes feste dras langs forelderen. Grip kurven til en rotspline for å flytte hele formen. Et punkt som dras nær en annen spline, snapper til den (Shift slår av).</p>
         <p class="help">Hold over en prikk for å se retningen, og dra for å trekke ut eller presse inn meshen. Prikkene lager ingen spliner. Esc avbryter.</p>
       </aside>
     </div>
