@@ -48,3 +48,17 @@ export async function newBranch(page: Page) {
   await page.locator('.axis-free').click();
   await expect(viewport(page)).toHaveAttribute('data-splines', String(before + 1));
 }
+
+/** Ekte berøringsdrag via Chrome DevTools-protokollen (gir pekerhendelser med pointerType «touch»). */
+export async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, steps = 8, holdMs = 0) {
+  const cdp = await page.context().newCDPSession(page);
+  const point = (x: number, y: number) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(from.x, from.y) });
+  if (holdMs) await page.waitForTimeout(holdMs);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t) });
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
