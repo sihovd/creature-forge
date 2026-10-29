@@ -1,7 +1,7 @@
 // Tverrsnittsomriss i 2D (issue #4, del 3). Speiler `profile.rs` i kjernen;
 // kjernen kontrollerer omrisset (minst tre punkter, areal, ingen selvkryssing)
 // når det lagres.
-import type { AnchorKind, Profile, ProfilePoint, Vec2 } from './protocol';
+import type { AnchorKind, Profile, ProfilePoint, Station, Vec2 } from './protocol';
 
 const CIRCLE_K = 0.5522847498307934;
 const POINTS_PER_CURVE = 16;
@@ -31,9 +31,35 @@ export function polygonProfile(points: Vec2[]): Profile {
   return { points: points.map(corner) };
 }
 
+const smooth = (position: Vec2, handleOut: Vec2, handleIn: Vec2 = mul(handleOut, -1)): ProfilePoint => ({
+  position,
+  handle_in: handleIn,
+  handle_out: handleOut,
+  kind: 'smooth',
+});
+
+/** Eggform med den smale enden opp. */
+export function egg(): Profile {
+  return {
+    points: [
+      smooth([0.78, -0.08], [0, 0.55], [0, -0.42]),
+      smooth([0, 1.1], [-0.42, 0]),
+      smooth([-0.78, -0.08], [0, -0.42], [0, 0.55]),
+      smooth([0, -0.86], [0.43, 0]),
+    ],
+  };
+}
+
+/** Likesidet trekant med spissen opp, innskrevet i enhetssirkelen. */
+export function triangle(): Profile {
+  return polygonProfile([[0, 1], [-0.866, -0.5], [0.866, -0.5]]);
+}
+
 export const PRESETS: Record<string, () => Profile> = {
   Sirkel: () => ellipse(1, 1),
   Ellipse: () => ellipse(1, 0.6),
+  Egg: egg,
+  Trekant: triangle,
   Kvadrat: () => polygonProfile([[0.85, -0.85], [0.85, 0.85], [-0.85, 0.85], [-0.85, -0.85]]),
   H: () =>
     polygonProfile([
@@ -156,3 +182,31 @@ export function area(p: Profile) {
   });
   return a / 2;
 }
+
+/** En kontur langs splinen med eget omriss, slik kjernen tar imot den. */
+export const station = (at: number, profile: Profile, scale = 1, rotation = 0): Station => ({
+  at,
+  shape: { kind: 'own', profile },
+  scale,
+  rotation,
+});
+
+/**
+ * Volumpresets: flere konturer langs splinen som sammen gir en form. Én
+ * sirkelprofil gir ikke en kule alene; kula trenger konturer som vokser og
+ * avtar langs splinen. Målene regnes fra splinens lengde og tykkelse (mm).
+ */
+export const VOLUMES: Record<string, (length: number, thickness: number) => Station[]> = {
+  Kule: (length, thickness) => {
+    const r = length / 2;
+    return [0.03, 0.18, 0.5, 0.82, 0.97].map((u) => station(u, ellipse(1, 1), Math.max(0.05, (r * Math.sqrt(Math.max(0, 1 - (2 * u - 1) ** 2))) / thickness)));
+  },
+  Hode: () => [
+    // Smal hals, større hodeparti og avsmalnende avslutning.
+    station(0.05, ellipse(1, 1), 0.6),
+    station(0.28, ellipse(1, 1), 0.65),
+    station(0.55, egg(), 1.35),
+    station(0.8, ellipse(1, 0.85), 1.1),
+    station(0.97, ellipse(1, 0.8), 0.35),
+  ],
+};

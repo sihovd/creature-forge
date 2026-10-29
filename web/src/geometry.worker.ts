@@ -50,6 +50,7 @@ function documentResult(shapes: number[], spacingMm: number, created: number | n
     state: { revision: doc.revision(), canUndo: doc.canUndo(), canRedo: doc.canRedo() },
     shapes: shapes.filter((s) => s !== SKELETON_SHAPE).map((s) => shapeUpdate(s, spacingMm)),
     skeleton: JSON.parse(doc.skeletonView()),
+    registry: JSON.parse(doc.registryView()),
     created,
   };
 }
@@ -82,6 +83,16 @@ function run(req: GeometryRequest): GeometryResult {
       });
       return { kind: 'skeletonPreview', skeleton, shapes };
     }
+    case 'saveProject':
+      return { kind: 'project', text: doc.toProject() };
+    case 'openProject': {
+      const before = Array.from(doc.shapeIds());
+      const next = Document.openProject(req.text, TARGET_EDGE_MM);
+      doc.free();
+      doc = next;
+      // Formene fra forrige dokument meldes også, så visningen fjerner dem.
+      return documentResult([...new Set([...before, ...Array.from(doc.shapeIds())])], req.spacingMm);
+    }
     case 'commitSkeleton': {
       let created = 0;
       const shapes = withShapes(() => {
@@ -94,6 +105,7 @@ function run(req: GeometryRequest): GeometryResult {
 }
 
 function transferables(result: GeometryResult): Transferable[] {
+  if (result.kind === 'project') return [];
   const meshes = result.kind === 'preview' ? [result.mesh] : result.shapes.flatMap((s) => (s.mesh ? [s.mesh] : []));
   const points = result.kind === 'document' ? result.shapes.map((s) => s.controlPoints.buffer) : [];
   return [...meshes.flatMap((m) => [m.positions.buffer, m.normals.buffer, m.indices.buffer]), ...points];

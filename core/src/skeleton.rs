@@ -58,6 +58,19 @@ impl Anchor {
     }
 }
 
+/// Hvordan en gren følger forelderen (Sivert 29. oktober 2026).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    /// Festet og grenens retning følger forelderens lokale ramme, så
+    /// grenens vinkel mot forelderen bevares når forelderen bøyes.
+    #[default]
+    FollowParent,
+    /// Festet følger forelderen, men grenen beholder retningen i
+    /// verdensrommet når forelderen bøyes eller redigeres.
+    KeepDirection,
+}
+
 /// Festet til en barnespline: forelderen og en andel av dens buelengde.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Attachment {
@@ -83,6 +96,19 @@ pub struct Spline {
     /// Flat ende med hele endeprofilen i stedet for en avrundet ende.
     #[serde(default)]
     pub flat_end: bool,
+    /// Navnet brukeren har gitt splinen. For en rotspline er det lagets navn.
+    /// Tomt: visningen lager et navn.
+    #[serde(default)]
+    pub name: String,
+    /// Laget er skjult. Gjelder bare rotspliner, og dermed hele laget.
+    #[serde(default)]
+    pub hidden: bool,
+    /// Laget er låst mot redigering. Gjelder bare rotspliner.
+    #[serde(default)]
+    pub locked: bool,
+    /// Hvordan en gren følger forelderen. Uten betydning for rotspliner.
+    #[serde(default)]
+    pub orientation: Orientation,
 }
 
 /// Ortonormal ramme: tangent T og tverretningene U og V.
@@ -441,6 +467,8 @@ pub enum SkeletonEdit {
         direction: Vec3,
         length: f64,
         thickness: f64,
+        #[serde(default)]
+        orientation: Orientation,
     },
     MoveAnchor {
         spline: SplineId,
@@ -481,9 +509,19 @@ pub enum SkeletonEdit {
         angle: f64,
         radius: f64,
     },
+    /// Flytter festet til andelen `at`, eventuelt over på en ny forelder.
+    /// Grenen beholder vinkelen mot forelderen (følg forelder) eller
+    /// retningen i verdensrommet (behold retning), og undergrenene følger.
     Reattach {
         spline: SplineId,
         at: f64,
+        #[serde(default)]
+        parent: Option<SplineId>,
+    },
+    /// Bytter hvordan grenen følger forelderen, uten at den flytter seg.
+    SetOrientation {
+        spline: SplineId,
+        orientation: Orientation,
     },
     /// Flytter en rotspline med alle grener.
     Translate {
@@ -547,6 +585,42 @@ pub enum SkeletonEdit {
         spline: SplineId,
         flat: bool,
     },
+    /// Nytt navn på en spline. For en rotspline er det lagets navn.
+    Rename {
+        spline: SplineId,
+        name: String,
+    },
+    /// Erstatter alle konturene på splinen, for eksempel med et volum fra
+    /// registeret (smal hals, større hode og avsmalnende ende).
+    SetStations {
+        spline: SplineId,
+        stations: Vec<Station>,
+    },
+    /// Lagrer omrisset til en kontur i registeret under `name`.
+    SaveProfile {
+        spline: SplineId,
+        station: usize,
+        name: String,
+    },
+    /// Lagrer alle konturene på splinen som et volum i registeret.
+    SaveVolume {
+        spline: SplineId,
+        name: String,
+    },
+    RenameEntry {
+        entry: u32,
+        name: String,
+    },
+    RemoveEntry {
+        entry: u32,
+    },
+    /// Skjuler eller låser laget med rotsplinen `spline`. Tillatt også når
+    /// laget er låst, så det kan låses opp.
+    SetLayer {
+        spline: SplineId,
+        hidden: bool,
+        locked: bool,
+    },
     Batch {
         edits: Vec<SkeletonEdit>,
     },
@@ -589,6 +663,7 @@ impl Skeleton {
 
     fn apply_inner(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
         use SkeletonEdit as E;
+        self.check_unlocked(edit)?;
         match *edit {
             E::AddRoot {
                 start,
@@ -611,10 +686,15 @@ impl Skeleton {
                 direction,
                 length,
                 thickness,
+                orientation,
             } => {
                 let start = self.world_spline(parent)?.point_at(at);
                 let anchors = straight_anchors(start, direction, length)?;
-                return self.add_child(parent, at, anchors, thickness).map(Some);
+                let id = self.add_child(parent, at, anchors, thickness)?;
+                if orientation != Orientation::FollowParent {
+                    self.set_orientation(id, orientation)?;
+                }
+                return Ok(Some(id));
             }
             E::MoveAnchor {
                 spline,
@@ -675,7 +755,11 @@ impl Skeleton {
                 let anchors = crate::bend::bend_from(&world, world.anchor_fraction(from), &bend)?;
                 self.set_world_anchors(spline, anchors)?
             }
-            E::Reattach { spline, at } => self.reattach(spline, at)?,
+            E::Reattach { spline, at, parent } => self.reattach(spline, parent, at)?,
+            E::SetOrientation {
+                spline,
+                orientation,
+            } => self.set_orientation(spline, orientation)?,
             E::Translate { spline, delta } => self.translate(spline, delta)?,
             E::SetThickness { spline, thickness } => self.set_thickness(spline, thickness)?,
             E::Remove { spline } => self.remove(spline)?,
@@ -782,6 +866,74 @@ impl Skeleton {
                 self.masters.insert(master, profile.clone());
             }
             E::SetFlatEnd { spline, flat } => self.update(spline, |s| s.flat_end = flat)?,
+            E::SetStations {
+                spline,
+                ref stations,
+            } => {
+                let mut stations = stations.clone();
+                for st in &stations {
+                    st.validate()?;
+                }
+                stations.sort_by(|a, b| a.at.total_cmp(&b.at));
+                self.update(spline, |s| s.profiles = stations)?
+            }
+            E::SaveProfile {
+                spline,
+                station,
+                ref name,
+            } => {
+                let profile = self.station_profile(self.station(spline, station)?)?;
+                self.add_entry(name, vec![Station::new(0.5, profile)], false)?
+            }
+            E::SaveVolume { spline, ref name } => {
+                let stations: Vec<Station> = self
+                    .resolved_profiles(spline)?
+                    .into_iter()
+                    .map(|r| Station {
+                        scale: r.scale,
+                        rotation: r.rotation,
+                        ..Station::new(r.at, r.profile)
+                    })
+                    .collect();
+                if stations.len() < 2 {
+                    return Err("Et volum trenger minst to konturer langs splinen".into());
+                }
+                self.add_entry(name, stations, true)?
+            }
+            E::RenameEntry { entry, ref name } => {
+                let name = valid_name(name)?;
+                self.registry
+                    .get_mut(&entry)
+                    .ok_or("Oppføringen finnes ikke")?
+                    .name = name;
+            }
+            E::RemoveEntry { entry } => {
+                self.registry
+                    .remove(&entry)
+                    .ok_or("Oppføringen finnes ikke")?;
+            }
+            E::Rename { spline, ref name } => {
+                let name = name.trim().to_string();
+                self.update(spline, |s| s.name = name)?
+            }
+            E::SetLayer {
+                spline,
+                hidden,
+                locked,
+            } => {
+                if self
+                    .spline(spline)
+                    .ok_or("Splinen finnes ikke")?
+                    .attachment
+                    .is_some()
+                {
+                    return Err("Bare et helt lag kan skjules eller låses".into());
+                }
+                self.update(spline, |s| {
+                    s.hidden = hidden;
+                    s.locked = locked;
+                })?
+            }
             E::Batch { ref edits } => {
                 let mut created = None;
                 for e in edits {
@@ -807,6 +959,13 @@ pub struct SplineView {
     pub anchors: Vec<AnchorView>,
     pub profiles: Vec<StationView>,
     pub flat_end: bool,
+    pub name: String,
+    /// Rotsplinen i laget splinen hører til.
+    pub layer: SplineId,
+    /// Laget er skjult eller låst (arves fra rotsplinen).
+    pub hidden: bool,
+    pub locked: bool,
+    pub orientation: Orientation,
 }
 
 /// En profilstasjon slik visningen og profileditoren trenger den.
@@ -820,6 +979,12 @@ pub struct StationView {
     pub profile: Profile,
     /// Omrisset i verdenskoordinater, for tegning rundt kurven.
     pub ring: Vec<Vec3>,
+    /// Konturens plan: sentrum på kurven, tangenten (planets normal) og
+    /// aksene profilens x og y peker langs (med rotasjonen tatt med).
+    pub origin: Vec3,
+    pub normal: Vec3,
+    pub x_axis: Vec3,
+    pub y_axis: Vec3,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -888,6 +1053,10 @@ impl Skeleton {
                             })
                             .collect();
                         Ok(StationView {
+                            origin: frame.origin,
+                            normal: frame.t,
+                            x_axis: frame.dir_to_world([cos, sin, 0.0]),
+                            y_axis: frame.dir_to_world([-sin, cos, 0.0]),
                             at: st.at,
                             scale: st.scale,
                             rotation: st.rotation,
@@ -900,7 +1069,14 @@ impl Skeleton {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
+                let root = self.root_of(*id).unwrap_or(*id);
+                let layer = &self.splines[&root];
                 Ok(SplineView {
+                    name: spline.name.clone(),
+                    layer: root,
+                    hidden: layer.hidden,
+                    locked: layer.locked,
+                    orientation: spline.orientation,
                     id: *id,
                     parent: spline.attachment.map(|a| a.parent),
                     at: spline.attachment.map_or(0.0, |a| a.at),
@@ -924,6 +1100,28 @@ pub struct Skeleton {
     /// Masterprofiler som stasjoner kan kobles til.
     #[serde(default)]
     masters: BTreeMap<MasterId, Profile>,
+    /// Konturregisteret: lagrede profiler og volumer brukeren kan gjenbruke.
+    /// En oppføring kopieres når den brukes og kobles ikke varig.
+    #[serde(default)]
+    registry: BTreeMap<u32, RegistryEntry>,
+}
+
+/// En lagret profil (én kontur) eller et volum (flere konturer langs en spline).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegistryEntry {
+    pub name: String,
+    /// Konturene, alltid med eget omriss. Én for en profil; for et volum
+    /// er `at` plassen langs splinen volumet legges på.
+    pub stations: Vec<Station>,
+    pub volume: bool,
+}
+
+/// En oppføring i registeret slik visningen trenger den.
+#[derive(Clone, Debug, Serialize)]
+pub struct RegistryView {
+    pub id: u32,
+    #[serde(flatten)]
+    pub entry: RegistryEntry,
 }
 
 /// Filformatet for et skjelett. Inngår senere i prosjektfilen.
@@ -943,6 +1141,7 @@ impl Skeleton {
             next_id: 1,
             splines: BTreeMap::new(),
             masters: BTreeMap::new(),
+            registry: BTreeMap::new(),
         }
     }
 
@@ -986,6 +1185,10 @@ impl Skeleton {
             thickness,
             profiles: Vec::new(),
             flat_end: false,
+            name: String::new(),
+            hidden: false,
+            locked: false,
+            orientation: Orientation::FollowParent,
         };
         self.insert(spline)
     }
@@ -1001,6 +1204,7 @@ impl Skeleton {
     ) -> Result<SplineId, String> {
         let attachment = Attachment { parent, at };
         let frame = self.attachment_frame(&attachment)?;
+        // Splinen er ny og følger forelderen, så festerammen er forelderens ramme.
         let spline = Spline {
             anchors: to_local(&frame, &world_anchors),
             attachment: Some(attachment),
@@ -1008,6 +1212,10 @@ impl Skeleton {
             thickness,
             profiles: Vec::new(),
             flat_end: false,
+            name: String::new(),
+            hidden: false,
+            locked: false,
+            orientation: Orientation::FollowParent,
         };
         self.insert(spline)
     }
@@ -1040,14 +1248,41 @@ impl Skeleton {
         Ok(self.world_spline(a.parent)?.frame_at(a.at))
     }
 
+    /// Rammen grenens punkter er lagret i, og referanseretningen for
+    /// grenens egen ramme, ut fra forelderens ramme i festet.
+    fn placement(spline: &Spline, parent_frame: Frame) -> (Frame, Vec3) {
+        match spline.orientation {
+            Orientation::FollowParent => (parent_frame, parent_frame.u),
+            // Bare festepunktet følger; aksene er verdensaksene.
+            Orientation::KeepDirection => (
+                Frame {
+                    origin: parent_frame.origin,
+                    t: [0.0, 0.0, 1.0],
+                    u: [1.0, 0.0, 0.0],
+                    v: [0.0, 1.0, 0.0],
+                },
+                spline.up,
+            ),
+        }
+    }
+
+    /// Rammen punktene til grenen `id` er lagret i.
+    fn child_frame(&self, id: SplineId) -> Result<Frame, String> {
+        let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
+        let a = spline
+            .attachment
+            .ok_or("Splinen er ikke festet til en forelder")?;
+        Ok(Self::placement(spline, self.attachment_frame(&a)?).0)
+    }
+
     /// Splinen i verdenskoordinater. Forfedrene evalueres først.
     pub fn world_spline(&self, id: SplineId) -> Result<WorldSpline, String> {
         let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
         match spline.attachment {
             None => WorldSpline::new(spline.anchors.clone(), spline.up),
             Some(a) => {
-                let frame = self.attachment_frame(&a)?;
-                WorldSpline::new(to_world(&frame, &spline.anchors), frame.u)
+                let (frame, up) = Self::placement(spline, self.attachment_frame(&a)?);
+                WorldSpline::new(to_world(&frame, &spline.anchors), up)
             }
         }
     }
@@ -1061,8 +1296,8 @@ impl Skeleton {
                 let world = match s.attachment {
                     None => WorldSpline::new(s.anchors.clone(), s.up)?,
                     Some(a) => {
-                        let frame = out[&a.parent].frame_at(a.at);
-                        WorldSpline::new(to_world(&frame, &s.anchors), frame.u)?
+                        let (frame, up) = Self::placement(s, out[&a.parent].frame_at(a.at));
+                        WorldSpline::new(to_world(&frame, &s.anchors), up)?
                     }
                 };
                 out.insert(id, world);
@@ -1081,7 +1316,7 @@ impl Skeleton {
         let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
         let anchors = match spline.attachment {
             None => world_anchors,
-            Some(a) => to_local(&self.attachment_frame(&a)?, &world_anchors),
+            Some(_) => to_local(&self.child_frame(id)?, &world_anchors),
         };
         self.update(id, |s| s.anchors = anchors)
     }
@@ -1172,13 +1407,49 @@ impl Skeleton {
         })
     }
 
-    /// Flytter festet langs forelderen. Barnets form i festets ramme beholdes.
-    pub fn reattach(&mut self, id: SplineId, at: f64) -> Result<(), String> {
+    /// Flytter festet langs forelderen, eller over på en ny forelder. Grenens
+    /// punkter i festerammen beholdes: med «følg forelder» er det vinkelen mot
+    /// forelderen, med «behold retning» retningen i verdensrommet. Sløyfer og
+    /// feste til seg selv avvises av valideringen.
+    pub fn reattach(
+        &mut self,
+        id: SplineId,
+        parent: Option<SplineId>,
+        at: f64,
+    ) -> Result<(), String> {
         let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
         let Some(a) = spline.attachment else {
             return Err("Splinen er ikke festet til en forelder".into());
         };
-        self.update(id, |s| s.attachment = Some(Attachment { at, ..a }))
+        let parent = parent.unwrap_or(a.parent);
+        if parent == id || self.descendants(id).contains(&parent) {
+            return Err("En gren kan ikke festes til seg selv eller sine egne undergrener".into());
+        }
+        self.update(id, |s| s.attachment = Some(Attachment { parent, at }))
+    }
+
+    /// Bytter hvordan grenen følger forelderen. Grenen står der den står; bare
+    /// lagringen av punktene endres, så det blir ikke noe hopp.
+    pub fn set_orientation(
+        &mut self,
+        id: SplineId,
+        orientation: Orientation,
+    ) -> Result<(), String> {
+        let world = self.world_spline(id)?;
+        if self.splines[&id].attachment.is_none() {
+            return Err("Bare en gren kan følge eller beholde retningen".into());
+        }
+        // Med «behold retning» lagres grenens egen referanseretning i
+        // verdensrommet, så tverrsnittet ikke vrir seg når forelderen bøyes.
+        let up = world.start_frame().u;
+        let mut next = self.clone();
+        next.update(id, |s| {
+            s.orientation = orientation;
+            s.up = up;
+        })?;
+        next.set_world_anchors(id, world.anchors)?;
+        *self = next;
+        Ok(())
     }
 
     /// Tykkelsen endrer ikke skjelettet eller festene.
@@ -1223,6 +1494,107 @@ impl Skeleton {
             .collect()
     }
 
+    /// Rotsplinen i laget som `id` hører til.
+    pub fn root_of(&self, id: SplineId) -> Option<SplineId> {
+        let mut cur = id;
+        for _ in 0..=self.splines.len() {
+            match self.splines.get(&cur)?.attachment {
+                Some(a) => cur = a.parent,
+                None => return Some(cur),
+            }
+        }
+        None
+    }
+
+    /// Laget til `id` er låst.
+    pub fn is_locked(&self, id: SplineId) -> bool {
+        self.root_of(id)
+            .and_then(|r| self.splines.get(&r))
+            .is_some_and(|s| s.locked)
+    }
+
+    /// Avviser redigeringer av et låst lag. Navn, skjuling og låsing er
+    /// tillatt, så laget kan låses opp igjen.
+    fn check_unlocked(&self, edit: &SkeletonEdit) -> Result<(), String> {
+        use SkeletonEdit as E;
+        let target = match *edit {
+            E::AddRoot { .. }
+            | E::Batch { .. }
+            | E::Rename { .. }
+            | E::SetLayer { .. }
+            | E::RenameEntry { .. }
+            | E::RemoveEntry { .. }
+            // Å lagre en kontur i registeret endrer ikke laget den ligger i.
+            | E::SaveProfile { .. }
+            | E::SaveVolume { .. } => None,
+            E::SetStations { spline, .. } => Some(spline),
+            E::AddChild { parent, .. } => Some(parent),
+            E::MoveAnchor { spline, .. }
+            | E::MoveTip { spline, .. }
+            | E::SetHandle { spline, .. }
+            | E::SetKind { spline, .. }
+            | E::InsertAnchor { spline, .. }
+            | E::Extend { spline, .. }
+            | E::Bend { spline, .. }
+            | E::Reattach { spline, .. }
+            | E::SetOrientation { spline, .. }
+            | E::Translate { spline, .. }
+            | E::SetThickness { spline, .. }
+            | E::Remove { spline }
+            | E::AddProfile { spline, .. }
+            | E::SetProfile { spline, .. }
+            | E::SetStation { spline, .. }
+            | E::RemoveProfile { spline, .. }
+            | E::MakeMaster { spline, .. }
+            | E::LinkMaster { spline, .. }
+            | E::Unlink { spline, .. }
+            | E::SetFlatEnd { spline, .. } => Some(spline),
+            E::SetMaster { master, .. } => {
+                // En master endrer alle koblede konturer, også i andre lag.
+                let linked = self.splines.iter().find(|(_, s)| {
+                    s.profiles
+                        .iter()
+                        .any(|st| st.shape == ProfileShape::Master { master })
+                });
+                linked.map(|(id, _)| *id).filter(|id| self.is_locked(*id))
+            }
+        };
+        match target {
+            Some(id) if self.is_locked(id) => Err("Laget er låst".into()),
+            _ => Ok(()),
+        }
+    }
+
+    fn add_entry(
+        &mut self,
+        name: &str,
+        stations: Vec<Station>,
+        volume: bool,
+    ) -> Result<(), String> {
+        let name = valid_name(name)?;
+        let id = self.registry.keys().next_back().map_or(1, |k| k + 1);
+        self.registry.insert(
+            id,
+            RegistryEntry {
+                name,
+                stations,
+                volume,
+            },
+        );
+        Ok(())
+    }
+
+    /// Konturregisteret.
+    pub fn registry(&self) -> Vec<RegistryView> {
+        self.registry
+            .iter()
+            .map(|(id, entry)| RegistryView {
+                id: *id,
+                entry: entry.clone(),
+            })
+            .collect()
+    }
+
     pub fn masters(&self) -> &BTreeMap<MasterId, Profile> {
         &self.masters
     }
@@ -1259,6 +1631,11 @@ impl Skeleton {
             if s.profiles.windows(2).any(|w| w[0].at > w[1].at) {
                 return Err(format!("Profilene i spline {id} er ikke sortert"));
             }
+            if s.attachment.is_some() && (s.hidden || s.locked) {
+                return Err(format!(
+                    "Spline {id} er en gren; bare lag kan skjules eller låses"
+                ));
+            }
             if let Some(a) = s.attachment {
                 if !self.splines.contains_key(&a.parent) {
                     return Err(format!(
@@ -1290,6 +1667,14 @@ impl Skeleton {
         for m in self.masters.values() {
             m.validate()?;
         }
+        for e in self.registry.values() {
+            for st in &e.stations {
+                st.validate()?;
+                if !matches!(st.shape, ProfileShape::Own { .. }) {
+                    return Err("En oppføring i registeret må ha egne omriss".into());
+                }
+            }
+        }
         self.evaluate().map(|_| ())
     }
 
@@ -1314,6 +1699,14 @@ impl Skeleton {
         file.skeleton.validate()?;
         Ok(file.skeleton)
     }
+}
+
+fn valid_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Oppføringen trenger et navn".into());
+    }
+    Ok(name.chars().take(60).collect())
 }
 
 fn to_local(frame: &Frame, world: &[Anchor]) -> Vec<Anchor> {
@@ -1497,7 +1890,7 @@ mod tests {
         sk.set_handle(child, 1, HandleSide::Out, [30.0, 15.0, 55.0])
             .unwrap();
         sk.set_anchor_kind(child, 1, AnchorKind::Corner).unwrap();
-        sk.reattach(child, 0.8).unwrap();
+        sk.reattach(child, None, 0.8).unwrap();
         assert_eq!(sk.world_anchors(root).unwrap(), parent_before);
         // Barnebarnet følger barnets nye ende.
         let w = sk.evaluate().unwrap();
@@ -1642,6 +2035,7 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 length: 20.0,
                 thickness: 2.0,
+                orientation: Orientation::FollowParent,
             })
             .unwrap()
             .unwrap();
@@ -1846,5 +2240,261 @@ mod tests {
             s.remove("flat_end");
         }
         assert_eq!(Skeleton::from_json(&json.to_string()).unwrap(), sk);
+    }
+
+    /// Bøyer roten i `three_levels` 90° mot +x med pivot 0,3.
+    fn bend_root(sk: &mut Skeleton, root: SplineId) {
+        let bend = Bend {
+            direction: [1.0, 0.0, 0.0],
+            angle: PI / 2.0,
+            radius: 30.0,
+            pivot: 0.3,
+        };
+        sk.set_world_anchors(
+            root,
+            bent_anchors([0.0; 3], [0.0, 0.0, 1.0], 100.0, &bend).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn behold_retning_holder_grenen_fast_i_verdensrommet_mens_festet_folger() {
+        let (mut sk, root, child, gc) = three_levels();
+        sk.set_orientation(child, Orientation::KeepDirection)
+            .unwrap();
+        let before = sk.evaluate().unwrap();
+        bend_root(&mut sk, root);
+        let after = sk.evaluate().unwrap();
+        // Festet følger forelderen.
+        assert!(close(
+            after[&child].point_at(0.0),
+            after[&root].point_at(0.5),
+            1e-9
+        ));
+        // Grenen er bare flyttet, ikke rotert: alle punkter har samme forskyvning.
+        let shift = sub(after[&child].point_at(0.0), before[&child].point_at(0.0));
+        assert!(length(shift) > 1.0);
+        for (a, b) in before[&child].anchors.iter().zip(&after[&child].anchors) {
+            assert!(close(sub(b.position, a.position), shift, 1e-9));
+            assert!(close(b.handle_out, a.handle_out, 1e-9));
+        }
+        // Tverrsnittets ramme vrir seg ikke, og undergrenen følger grenen.
+        let (f0, f1) = (before[&child].start_frame(), after[&child].start_frame());
+        assert!(close(f0.u, f1.u, 1e-9));
+        assert!(close(
+            sub(after[&gc].point_at(1.0), before[&gc].point_at(1.0)),
+            shift,
+            1e-9
+        ));
+    }
+
+    #[test]
+    fn bytte_av_orientering_gir_ikke_hopp() {
+        let (mut sk, root, child, gc) = three_levels();
+        bend_root(&mut sk, root);
+        let before = sk.evaluate().unwrap();
+        for o in [
+            Orientation::KeepDirection,
+            Orientation::FollowParent,
+            Orientation::KeepDirection,
+        ] {
+            sk.apply(&SkeletonEdit::SetOrientation {
+                spline: child,
+                orientation: o,
+            })
+            .unwrap();
+            let after = sk.evaluate().unwrap();
+            for id in [child, gc] {
+                for (a, b) in before[&id].anchors.iter().zip(&after[&id].anchors) {
+                    assert!(close(a.position, b.position, 1e-9));
+                    assert!(close(a.handle_in, b.handle_in, 1e-9));
+                }
+                assert!(close(
+                    before[&id].start_frame().u,
+                    after[&id].start_frame().u,
+                    1e-9
+                ));
+            }
+        }
+        // En rotspline har ingen forelder å følge.
+        assert!(sk
+            .apply(&SkeletonEdit::SetOrientation {
+                spline: root,
+                orientation: Orientation::KeepDirection
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn festet_flyttes_over_paa_en_annen_spline_med_undergrener() {
+        let (mut sk, root, child, gc) = three_levels();
+        // En annen gren på roten, ut langs -x fra 0,8.
+        let other = sk
+            .add_child(
+                root,
+                0.8,
+                straight([0.0, 0.0, 80.0], [-1.0, 0.0, 0.0], 30.0),
+                4.0,
+            )
+            .unwrap();
+        let before = sk.evaluate().unwrap();
+        let angle = |w: &BTreeMap<SplineId, WorldSpline>, parent: SplineId, at: f64| {
+            dot(w[&parent].frame_at(at).t, w[&child].frame_at(0.0).t)
+        };
+        let a0 = angle(&before, root, 0.5);
+        // Følg forelder: vinkelen mot den nye forelderen er den samme.
+        sk.apply(&SkeletonEdit::Reattach {
+            spline: child,
+            at: 0.5,
+            parent: Some(other),
+        })
+        .unwrap();
+        let after = sk.evaluate().unwrap();
+        assert_eq!(sk.spline(child).unwrap().attachment.unwrap().parent, other);
+        assert!(close(
+            after[&child].point_at(0.0),
+            after[&other].point_at(0.5),
+            1e-9
+        ));
+        assert!((angle(&after, other, 0.5) - a0).abs() < 1e-9);
+        assert!((after[&child].length - before[&child].length).abs() < 1e-9);
+        // Undergrenen er med.
+        assert!(close(
+            after[&gc].point_at(0.0),
+            after[&child].point_at(1.0),
+            1e-9
+        ));
+
+        // Behold retning: verdensretningen er den samme etter flyttingen.
+        sk.apply(&SkeletonEdit::SetOrientation {
+            spline: child,
+            orientation: Orientation::KeepDirection,
+        })
+        .unwrap();
+        let dir0 = sk.evaluate().unwrap()[&child].frame_at(0.0).t;
+        sk.apply(&SkeletonEdit::Reattach {
+            spline: child,
+            at: 0.2,
+            parent: Some(root),
+        })
+        .unwrap();
+        let w = sk.evaluate().unwrap();
+        assert!(close(w[&child].frame_at(0.0).t, dir0, 1e-9));
+        assert!(close(w[&child].point_at(0.0), w[&root].point_at(0.2), 1e-9));
+
+        // Ingen feste til seg selv eller til egne undergrener, og ingen sløyfer.
+        let rejected = |sk: &mut Skeleton, parent| {
+            sk.apply(&SkeletonEdit::Reattach {
+                spline: child,
+                at: 0.5,
+                parent: Some(parent),
+            })
+            .is_err()
+        };
+        assert!(rejected(&mut sk, child));
+        assert!(rejected(&mut sk, gc));
+        assert!(sk.validate().is_ok());
+        // Lagring og åpning bevarer festet og orienteringen.
+        let opened = Skeleton::from_json(&sk.to_json()).unwrap();
+        assert_eq!(opened, sk);
+    }
+
+    #[test]
+    fn registeret_lagrer_profiler_og_volumer_som_kopier() {
+        let (mut sk, root, child, _) = three_levels();
+        sk.apply(&SkeletonEdit::Batch {
+            edits: vec![
+                SkeletonEdit::AddProfile {
+                    spline: root,
+                    at: 0.2,
+                    from: None,
+                },
+                SkeletonEdit::SetProfile {
+                    spline: root,
+                    station: 0,
+                    profile: Profile::h_shape(),
+                },
+                SkeletonEdit::AddProfile {
+                    spline: root,
+                    at: 0.8,
+                    from: None,
+                },
+                SkeletonEdit::MakeMaster {
+                    spline: root,
+                    station: 1,
+                },
+            ],
+        })
+        .unwrap();
+        sk.apply(&SkeletonEdit::SaveProfile {
+            spline: root,
+            station: 0,
+            name: " H-profil ".into(),
+        })
+        .unwrap();
+        sk.apply(&SkeletonEdit::SaveVolume {
+            spline: root,
+            name: "Hode".into(),
+        })
+        .unwrap();
+        let reg = sk.registry();
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg[0].entry.name, "H-profil");
+        assert!(!reg[0].entry.volume);
+        assert_eq!(
+            reg[0].entry.stations[0].shape,
+            ProfileShape::Own {
+                profile: Profile::h_shape()
+            }
+        );
+        // Volumet er lagret med egne omriss, ikke masterkobling.
+        assert!(reg[1].entry.volume);
+        assert_eq!(reg[1].entry.stations.len(), 2);
+        assert!(reg[1]
+            .entry
+            .stations
+            .iter()
+            .all(|st| matches!(st.shape, ProfileShape::Own { .. })));
+        // Bruk volumet på en annen spline: konturene kopieres.
+        sk.apply(&SkeletonEdit::SetStations {
+            spline: child,
+            stations: reg[1].entry.stations.clone(),
+        })
+        .unwrap();
+        assert_eq!(sk.spline(child).unwrap().profiles.len(), 2);
+        // En senere masterendring påvirker ikke kopien.
+        sk.apply(&SkeletonEdit::SetMaster {
+            master: 1,
+            profile: Profile::ellipse(1.0, 0.3),
+        })
+        .unwrap();
+        assert_ne!(
+            sk.resolved_profiles(child).unwrap()[1].profile,
+            Profile::ellipse(1.0, 0.3)
+        );
+        // Navn, sletting og lagring.
+        sk.apply(&SkeletonEdit::RenameEntry {
+            entry: reg[1].id,
+            name: "Hode 2".into(),
+        })
+        .unwrap();
+        assert!(sk
+            .apply(&SkeletonEdit::RenameEntry {
+                entry: reg[1].id,
+                name: "  ".into()
+            })
+            .is_err());
+        let opened = Skeleton::from_json(&sk.to_json()).unwrap();
+        assert_eq!(opened.registry()[1].entry.name, "Hode 2");
+        sk.apply(&SkeletonEdit::RemoveEntry { entry: reg[0].id })
+            .unwrap();
+        assert_eq!(sk.registry().len(), 1);
+        // Et volum trenger minst to konturer.
+        assert!(sk
+            .apply(&SkeletonEdit::SaveVolume {
+                spline: 3,
+                name: "x".into()
+            })
+            .is_err());
     }
 }

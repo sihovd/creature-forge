@@ -8,6 +8,8 @@ import type { Viewport } from './viewport';
 const PICK_RADIUS_PX = { mouse: 12, touch: 26 };
 /** Kurven gripes nærmere enn punktene, så prikkene rundt den kan brukes. */
 const CURVE_RADIUS_PX = { mouse: 6, touch: 16 };
+/** Avstand på skjermen fra et kryss der et grenfeste kan gå over på en annen spline. */
+const JUNCTION_PX = { mouse: 22, touch: 34 };
 /** Avstand på skjermen der enden av en spline snapper til en annen spline. */
 const SNAP_RADIUS_PX = 14;
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
@@ -23,16 +25,25 @@ export interface SkeletonToolCallbacks {
   restore: () => void;
   status: (text: string) => void;
   selectionChanged: () => void;
+  /** Aktivt verktøy: «Velg» eller «Bézier» (trykk på kurven setter inn et punkt). */
+  tool: () => 'select' | 'bezier';
 }
+
+/** Et trykk regnes som trykk og ikke drag når pekeren flyttes mindre enn dette. */
+const TAP_PX = 5;
 
 type TipMode = 'pull' | 'plane' | 'bend';
 
 /** Hele formen flyttes ved å gripe kurven til en rotspline. */
 type CurvePick = { kind: 'curve'; spline: number; index: number; position: THREE.Vector3 };
+/** En kontur gripes og flyttes langs splinen sin. */
+type RingPick = { kind: 'ring'; spline: number; index: number; station: number; position: THREE.Vector3 };
+/** Konturene gripes nærmere enn punktene, så prikkene rundt dem kan brukes. */
+const RING_RADIUS_PX = { mouse: 6, touch: 14 };
 
 interface Drag {
   pointerId: number;
-  pick: SkeletonPick | CurvePick;
+  pick: SkeletonPick | CurvePick | RingPick;
   startMouse: THREE.Vector2;
   mouse: THREE.Vector2;
   moved: boolean;
@@ -50,6 +61,11 @@ interface Drag {
   snap: SnapTarget | null;
   /** Fra pekeren til det grepne punktet på skjermen, ved starten av draget. */
   grabOffset: THREE.Vector2;
+  /** Grenfestet som dras gjennom spline-nettverket: forelder og andel. */
+  route: { parent: number; at: number } | null;
+  /** Splinene festet kan gå over på i krysset ved pekeren. */
+  routeOptions?: number[];
+  touch: boolean;
 }
 
 /**
@@ -69,6 +85,10 @@ export class SkeletonTool {
   private latest: SplineView[] = [];
   private inFlight = false;
   private queued: SkeletonEdit | null = null;
+  /** Et trykk på kurven med Bézier-verktøyet som setter inn et punkt når pekeren slippes. */
+  private insert: { pointerId: number; x: number; y: number; spline: number; at: number } | null = null;
+  /** Pekeren som sist startet et drag i skjelettet, så andre trykkhandlinger kan hoppe over den. */
+  handledPointer: number | null = null;
 
   constructor(
     private viewport: Viewport,
@@ -83,6 +103,10 @@ export class SkeletonTool {
     el.addEventListener('pointercancel', (e) => this.drag?.pointerId === e.pointerId && this.cancel());
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     el.parentElement!.addEventListener('wheel', (e) => this.onWheel(e), { capture: true, passive: false });
+    window.addEventListener('pointermove', (e) => {
+      if (this.insert?.pointerId === e.pointerId && Math.hypot(e.clientX - this.insert.x, e.clientY - this.insert.y) > TAP_PX) this.insert = null;
+    });
+    window.addEventListener('pointerup', (e) => this.onInsertUp(e));
     window.addEventListener('keydown', (e) => this.onKey(e));
     window.addEventListener('keyup', (e) => this.onKey(e));
   }
@@ -92,12 +116,25 @@ export class SkeletonTool {
   }
 
   private onDown(e: PointerEvent) {
-    if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement) return;
+    if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement || this.viewport.interactionLocked) return;
     const touch = e.pointerType === 'touch';
     const px = touch ? PICK_RADIUS_PX.touch : PICK_RADIUS_PX.mouse;
-    let pick: SkeletonPick | CurvePick | null = this.view.pick(e.clientX, e.clientY, px);
+    let pick: SkeletonPick | CurvePick | RingPick | null = this.view.pick(e.clientX, e.clientY, px);
+    const curvePx = touch ? CURVE_RADIUS_PX.touch : CURVE_RADIUS_PX.mouse;
     if (!pick) {
-      const near = this.view.pickCurve(e.clientX, e.clientY, touch ? CURVE_RADIUS_PX.touch : CURVE_RADIUS_PX.mouse);
+      const ring = this.view.pickRing(e.clientX, e.clientY, touch ? RING_RADIUS_PX.touch : RING_RADIUS_PX.mouse);
+      const st = ring && this.view.spline(ring.spline)?.profiles[ring.station];
+      if (ring && st) pick = { kind: 'ring', spline: ring.spline, index: -1, station: ring.station, position: v3(st.origin) };
+    }
+    if (!pick && this.cb.tool() === 'bezier') {
+      // Bézier: et trykk på kurven setter inn et punkt. Draget går til
+      // kameraet, så et drag ved siden av et punkt flytter verken punkt eller form.
+      const near = this.view.pickCurve(e.clientX, e.clientY, curvePx);
+      this.insert = near ? { pointerId: e.pointerId, x: e.clientX, y: e.clientY, spline: near.spline, at: near.at } : null;
+      return;
+    }
+    if (!pick) {
+      const near = this.view.pickCurve(e.clientX, e.clientY, curvePx);
       if (near && this.view.spline(near.spline)?.parent === null) {
         pick = { kind: 'curve', spline: near.spline, index: -1, position: near.position };
       }
@@ -105,6 +142,7 @@ export class SkeletonTool {
     if (!pick) return;
     // Skjelettet ligger oppå formene og har forrang foran formgrep og kamera.
     e.stopImmediatePropagation();
+    this.handledPointer = e.pointerId;
     this.viewport.controls.enabled = false;
     // Kontrollpunktene gjelder meshen før draget og skjules til den er beregnet på nytt.
     this.viewport.setControlPointsVisible(false);
@@ -112,9 +150,13 @@ export class SkeletonTool {
     this.latest = this.view.splines;
     const mouse = new THREE.Vector2(e.clientX, e.clientY);
     const previous = this.view.selection;
-    this.view.select({ spline: pick.spline, index: pick.kind === 'curve' ? null : pick.index });
+    this.view.select(
+      pick.kind === 'ring'
+        ? { spline: pick.spline, index: null, station: pick.station }
+        : { spline: pick.spline, index: pick.kind === 'curve' ? null : pick.index },
+    );
     this.cb.selectionChanged();
-    this.drag = {
+    const drag: Drag = (this.drag = {
       pointerId: e.pointerId,
       pick,
       startMouse: mouse.clone(),
@@ -130,7 +172,14 @@ export class SkeletonTool {
       bend: null,
       snap: null,
       grabOffset: this.viewport.toScreen(pick.position).sub(this.canvasPoint(mouse)),
-    };
+      route: null,
+      touch,
+    });
+    const ps = this.spline(pick.spline);
+    if (pick.kind === 'anchor' && pick.index === 0 && ps?.parent != null) {
+      drag.route = { parent: ps.parent, at: ps.at };
+      this.view.showRoute(ps.parent);
+    }
     // Bøyen starter i punktet som var valgt før tuppen ble grepet.
     this.bendFrom = previous?.spline === pick.spline ? previous.index : null;
     this.enterMode(this.drag);
@@ -138,7 +187,7 @@ export class SkeletonTool {
 
   private bendFrom: number | null = null;
 
-  private isTip(pick: SkeletonPick | CurvePick) {
+  private isTip(pick: SkeletonPick | CurvePick | RingPick) {
     const s = this.spline(pick.spline);
     return pick.kind === 'anchor' && !!s && pick.index === s.anchors.length - 1;
   }
@@ -222,7 +271,67 @@ export class SkeletonTool {
     this.step(drag);
   }
 
+  /** Splinen og alle undergrener under den. */
+  private subtree(id: number) {
+    const out = new Set<number>([id]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const s of this.latest) {
+        if (s.parent !== null && out.has(s.parent) && !out.has(s.id)) {
+          out.add(s.id);
+          grew = true;
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Kryssene på splinen `id`: grener som er festet til den, og festet til
+   * dens egen forelder. Grenen som dras og undergrenene dens er utelatt.
+   */
+  private junctions(id: number, exclude: Set<number>) {
+    const s = this.spline(id);
+    if (!s) return [];
+    const out: { spline: number; junction: THREE.Vector3; atOnCurrent: number }[] = [];
+    for (const c of this.latest) {
+      if (c.parent === id && !exclude.has(c.id)) out.push({ spline: c.id, junction: v3(c.anchors[0].position), atOnCurrent: c.at });
+    }
+    if (s.parent !== null && !exclude.has(s.parent)) out.push({ spline: s.parent, junction: v3(s.anchors[0].position), atOnCurrent: 0 });
+    return out;
+  }
+
+  /**
+   * Fører grenfestet langs gjeldende forelder. Nær et kryss kan festet gå
+   * over på en annen spline; pekeren avgjør hvilken vei, som i et veikryss.
+   */
+  private updateRoute(drag: Drag) {
+    const route = drag.route!;
+    const exclude = this.subtree(drag.pick.spline);
+    const near = this.view.nearestOn(route.parent, drag.mouse.x, drag.mouse.y);
+    if (!near) return;
+    route.at = near.at;
+    const limit = drag.touch ? JUNCTION_PX.touch : JUNCTION_PX.mouse;
+    // Kryssene på gjeldende spline nær festet.
+    const nearby = (at: THREE.Vector3) =>
+      this.junctions(route.parent, exclude).filter((j) => this.viewport.toScreen(j.junction).distanceTo(this.viewport.toScreen(at)) < limit);
+    let at = near.position;
+    for (const o of nearby(at)) {
+      const alt = this.view.nearestOn(o.spline, drag.mouse.x, drag.mouse.y);
+      if (alt && alt.d + 2 < near.d) {
+        route.parent = o.spline;
+        route.at = alt.at;
+        at = alt.position;
+        break;
+      }
+    }
+    const shown = nearby(at);
+    this.view.showRoute(route.parent, shown);
+    drag.routeOptions = shown.map((o) => o.spline);
+  }
+
   private step(drag: Drag) {
+    if (drag.route) this.updateRoute(drag);
     if (drag.grip) drag.grip.update(drag.mouse, drag.grip.mode);
     if (drag.bend) drag.bend.drag.update(drag.mouse);
     if (!drag.moved) return;
@@ -264,7 +373,12 @@ export class SkeletonTool {
   private edit(drag: Drag, all: boolean): SkeletonEdit {
     const { pick } = drag;
     let current: SkeletonEdit;
-    if (drag.bend) {
+    if (pick.kind === 'ring') {
+      // Konturen flyttes langs splinen til punktet nærmest pekeren.
+      const st = this.spline(pick.spline)!.profiles[pick.station];
+      const near = this.view.nearestOn(pick.spline, drag.mouse.x, drag.mouse.y);
+      current = { kind: 'setStation', spline: pick.spline, station: pick.station, at: near ? near.at : st.at, scale: st.scale, rotation: st.rotation };
+    } else if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       current = { kind: 'bend', spline: pick.spline, from: drag.bend.from, direction: arr(b.direction), angle: b.angle, radius: b.radius };
     } else if (pick.kind === 'curve') {
@@ -272,11 +386,9 @@ export class SkeletonTool {
       current = { kind: 'translate', spline: pick.spline, delta: arr(delta) };
     } else if (pick.kind === 'handle') {
       current = { kind: 'setHandle', spline: pick.spline, index: pick.index, side: pick.side, position: arr(drag.grip!.tip) };
-    } else if (pick.index === 0 && this.spline(pick.spline)?.parent != null) {
-      // Festet dras langs forelderen.
-      const parent = this.spline(pick.spline)!.parent!;
-      const near = this.view.pickCurve(drag.mouse.x, drag.mouse.y, Infinity, parent);
-      current = { kind: 'reattach', spline: pick.spline, at: near ? near.at : this.spline(pick.spline)!.at };
+    } else if (drag.route) {
+      // Festet dras langs forelderen og eventuelt over på en annen spline.
+      current = { kind: 'reattach', spline: pick.spline, at: drag.route.at, parent: drag.route.parent };
     } else if (drag.tip) {
       current = { kind: 'moveTip', spline: pick.spline, position: arr(drag.snap?.position ?? drag.grip!.tip) };
     } else {
@@ -293,6 +405,7 @@ export class SkeletonTool {
 
   private describeMove(drag: Drag) {
     if (drag.pick.kind === 'curve') return 'Flytt hele formen';
+    if (drag.pick.kind === 'ring') return `Flytt kontur ${drag.pick.station + 1} langs splinen`;
     if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       const snap = drag.ctrl ? ' (snapper 15°)' : '';
@@ -302,7 +415,13 @@ export class SkeletonTool {
     if (drag.mode === 'pull') return 'Trekk ut langs enden';
     if (drag.mode === 'plane') return 'Panorer tuppen (Alt)';
     if (drag.pick.kind === 'handle') return 'Flytt håndtak';
-    return drag.pick.index === 0 && this.spline(drag.pick.spline)?.parent != null ? 'Flytt festet langs forelderen' : 'Flytt punkt';
+    if (drag.route) {
+      const on = this.spline(drag.route.parent);
+      const name = (s: SplineView | null) => (!s ? '' : s.parent === null ? 'hovedsplinen' : s.name || `Gren ${s.id}`);
+      const options = (drag.routeOptions ?? []).map((id) => name(this.spline(id)));
+      return `Flytt festet langs ${name(on)}${options.length ? ` · dra videre inn på ${options.join(' eller ')}` : ''}`;
+    }
+    return 'Flytt punkt';
   }
 
   private requestPreview(edit: SkeletonEdit) {
@@ -340,10 +459,21 @@ export class SkeletonTool {
     if (!drag || e.pointerId !== drag.pointerId) return;
     this.end();
     if (!drag.moved) {
-      this.cb.status('Valgt punkt. Dra for å flytte, eller grip tuppen og hold Alt + Shift for å bøye herfra.');
+      this.cb.status(
+        drag.pick.kind === 'ring'
+          ? 'Valgt kontur. Dra den langs splinen, eller hold inne (høyreklikk) for «Rediger kontur».'
+          : 'Valgt punkt. Dra for å flytte, eller grip tuppen og hold Alt + Shift for å bøye herfra.',
+      );
       return;
     }
-    this.cb.commit(this.edit(drag, true), this.describe(drag).split(' · scroll')[0]);
+    const edit = this.edit(drag, true);
+    if (drag.pick.kind === 'ring' && edit.kind === 'setStation') {
+      // Konturene sorteres etter plass; valget følger konturen som ble flyttet.
+      const others = this.spline(drag.pick.spline)!.profiles.filter((_, i) => i !== (drag.pick as RingPick).station);
+      this.view.select({ spline: drag.pick.spline, index: null, station: others.filter((p) => p.at <= edit.at).length });
+      this.cb.selectionChanged();
+    }
+    this.cb.commit(edit, this.describe(drag).split(' · scroll')[0]);
   }
 
   cancel() {
@@ -359,10 +489,21 @@ export class SkeletonTool {
     this.queued = null;
     this.view.hideBend();
     this.view.showSnap(null);
+    this.view.showRoute(null);
     this.viewport.controls.enabled = true;
     this.viewport.setControlPointsVisible(true);
     const el = this.viewport.renderer.domElement;
     if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
+  }
+
+  private onInsertUp(e: PointerEvent) {
+    const ins = this.insert;
+    if (!ins || ins.pointerId !== e.pointerId) return;
+    this.insert = null;
+    this.handledPointer = e.pointerId;
+    this.view.select({ spline: ins.spline, index: null });
+    this.cb.selectionChanged();
+    this.cb.commit({ kind: 'insertAnchor', spline: ins.spline, at: ins.at }, 'Satte inn et ankerpunkt');
   }
 
   private onDoubleClick(e: MouseEvent) {

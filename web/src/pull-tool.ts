@@ -50,7 +50,7 @@ export class PullTool {
   }
 
   private onDown(e: PointerEvent) {
-    if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement) return;
+    if (e.button !== 0 || this.drag || e.target !== this.viewport.renderer.domElement || this.viewport.interactionLocked) return;
     const px = e.pointerType === 'touch' ? PICK_RADIUS_PX.touch : PICK_RADIUS_PX.mouse;
     const point = this.viewport.pickControlPoint(e.clientX, e.clientY, px);
     if (!point) return;
@@ -68,7 +68,7 @@ export class PullTool {
   private onMove(e: PointerEvent) {
     const drag = this.drag;
     if (!drag) {
-      if (e.pointerType === 'mouse') this.setHover(this.viewport.pickControlPoint(e.clientX, e.clientY, PICK_RADIUS_PX.mouse));
+      if (e.pointerType === 'mouse' && !this.viewport.interactionLocked) this.setHover(this.viewport.pickControlPoint(e.clientX, e.clientY, PICK_RADIUS_PX.mouse));
       return;
     }
     if (e.pointerId !== drag.pointerId) return;

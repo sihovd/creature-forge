@@ -1,16 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
+import { newSpline, status, viewport } from './helpers';
 
-const viewport = (page: Page) => page.locator('#viewport');
-const status = (page: Page) => page.locator('#status');
 const editor = (page: Page) => page.locator('#profile-editor svg');
 
-async function addSpline(page: Page) {
-  const button = page.getByRole('button', { name: 'Ny spline' });
-  await expect(button).toBeEnabled();
-  const before = Number(await viewport(page).getAttribute('data-splines'));
-  await button.click();
-  await expect(viewport(page)).toHaveAttribute('data-splines', String(before + 1));
-}
+const addSpline = (page: Page, axis = '+Y') => newSpline(page, axis);
 
 const screenPoint = async (page: Page, spline: number, fraction: number) => {
   const p = await page.evaluate(([s, f]) => window.creatureForgeTest!.splineCurvePoint(s, f), [spline, fraction]);
@@ -31,7 +24,7 @@ test('kontur: ny kontur, H-form, kopier og lim inn, og master', async ({ page })
   // Ny kontur er en sirkel med fire punkter.
   await expect(editor(page)).toHaveAttribute('data-points', '4');
 
-  await page.locator('#profile-preset').selectOption('H');
+  await page.locator('#registry [data-key="p:H"] > button').click();
   await expect(status(page)).toContainText('Kontur: H');
   await expect(editor(page)).toHaveAttribute('data-points', '12');
 
@@ -81,20 +74,26 @@ test.describe('med mus', () => {
 
   test('høyreklikk gir hurtigvalg i arbeidsrommet og på formen', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: 'Legg til kule' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Ny spline' })).toBeEnabled();
     const box = (await viewport(page).boundingBox())!;
     await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.8, { button: 'right' });
     const menu = page.locator('.context-menu');
     await expect(menu).toBeVisible();
-    await menu.getByRole('menuitem', { name: 'Legg til kule her' }).click();
+    await expect(menu.getByRole('menuitem', { name: 'Legg til kule her' })).toHaveCount(0);
+    await menu.getByRole('menuitem', { name: 'Ny spline her' }).click();
     await expect(menu).toBeHidden();
+    await page.locator('.axis-label', { hasText: '+Y' }).click();
     await expect(viewport(page)).toHaveAttribute('data-shape-count', '1');
+    await page.locator('#thickness').fill('20');
+    await page.locator('#thickness').press('Enter');
+    await expect(status(page)).toContainText('Tykkelse 20 mm');
 
-    // Høyreklikk på kula, utenfor splinen i midten.
-    const tip = await screenPoint(page, 1, 1);
-    await page.mouse.click(tip.x + 40, tip.y + 10, { button: 'right' });
-    await expect(menu).toContainText('Formen');
+    // Høyreklikk på formen, utenfor splinen i midten.
+    const mid = await screenPoint(page, 1, 0.5);
+    await page.mouse.click(mid.x + 25, mid.y, { button: 'right' });
+    await expect(menu).toContainText('Lag 1');
     await menu.getByRole('menuitem', { name: 'Ny gren ut herfra' }).click();
+    await page.locator('.axis-free').click();
     await expect(viewport(page)).toHaveAttribute('data-splines', '2');
     await expect(viewport(page)).toHaveAttribute('data-shape-count', '1');
   });
@@ -120,7 +119,7 @@ test.describe('med mus', () => {
   test('enden snapper til en annen spline', async ({ page }) => {
     await page.goto('/');
     await addSpline(page);
-    await addSpline(page);
+    await addSpline(page, '+X');
     await expect(viewport(page)).toHaveAttribute('data-splines', '2');
     const target = await anchors(page, 1);
     const tip = await screenPoint(page, 2, 1);

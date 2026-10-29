@@ -13,14 +13,16 @@ export type Command =
   | { kind: 'redo' }
   | { kind: 'controlPoints'; spacingMm: number }
   | { kind: 'previewSkeleton'; edit: SkeletonEdit }
-  | { kind: 'commitSkeleton'; edit: SkeletonEdit };
+  | { kind: 'commitSkeleton'; edit: SkeletonEdit }
+  | { kind: 'saveProject' }
+  | { kind: 'openProject'; text: string };
 
 export type Vec3 = [number, number, number];
 
 /** Redigeringer av spline-skjelettet. Speiler `SkeletonEdit` i kjernen. */
 export type SkeletonEdit =
   | { kind: 'addRoot'; start: Vec3; direction: Vec3; length: number; thickness: number }
-  | { kind: 'addChild'; parent: number; at: number; direction: Vec3; length: number; thickness: number }
+  | { kind: 'addChild'; parent: number; at: number; direction: Vec3; length: number; thickness: number; orientation?: Orientation }
   | { kind: 'moveAnchor'; spline: number; index: number; position: Vec3 }
   | { kind: 'moveTip'; spline: number; position: Vec3 }
   | { kind: 'setHandle'; spline: number; index: number; side: 'in' | 'out'; position: Vec3 }
@@ -28,7 +30,8 @@ export type SkeletonEdit =
   | { kind: 'insertAnchor'; spline: number; at: number }
   | { kind: 'extend'; spline: number; delta: number }
   | { kind: 'bend'; spline: number; from: number; direction: Vec3; angle: number; radius: number }
-  | { kind: 'reattach'; spline: number; at: number }
+  | { kind: 'reattach'; spline: number; at: number; parent?: number }
+  | { kind: 'setOrientation'; spline: number; orientation: Orientation }
   | { kind: 'translate'; spline: number; delta: Vec3 }
   | { kind: 'setThickness'; spline: number; thickness: number }
   | { kind: 'remove'; spline: number }
@@ -41,9 +44,19 @@ export type SkeletonEdit =
   | { kind: 'unlink'; spline: number; station: number }
   | { kind: 'setMaster'; master: number; profile: Profile }
   | { kind: 'setFlatEnd'; spline: number; flat: boolean }
+  | { kind: 'rename'; spline: number; name: string }
+  | { kind: 'setStations'; spline: number; stations: Station[] }
+  | { kind: 'saveProfile'; spline: number; station: number; name: string }
+  | { kind: 'saveVolume'; spline: number; name: string }
+  | { kind: 'renameEntry'; entry: number; name: string }
+  | { kind: 'removeEntry'; entry: number }
+  | { kind: 'setLayer'; spline: number; hidden: boolean; locked: boolean }
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
 export type AnchorKind = 'smooth' | 'corner';
+
+/** Hvordan en gren følger forelderen: forelderens rotasjon eller fast retning i verdensrommet. */
+export type Orientation = 'follow_parent' | 'keep_direction';
 
 export type Vec2 = [number, number];
 
@@ -60,6 +73,22 @@ export interface Profile {
   points: ProfilePoint[];
 }
 
+/** En kontur slik den lagres i kjernen: plass, omriss (eget eller master), størrelse og rotasjon. */
+export interface Station {
+  at: number;
+  shape: { kind: 'own'; profile: Profile } | { kind: 'master'; master: number };
+  scale: number;
+  rotation: number;
+}
+
+/** En oppføring i konturregisteret: én profil, eller et volum med flere konturer. */
+export interface RegistryEntry {
+  id: number;
+  name: string;
+  stations: Station[];
+  volume: boolean;
+}
+
 /** En tverrsnittsprofil på et sted langs splinen. */
 export interface StationView {
   at: number;
@@ -69,6 +98,11 @@ export interface StationView {
   profile: Profile;
   /** Omrisset rundt kurven i verdenskoordinater. */
   ring: Vec3[];
+  /** Konturens plan: sentrum, normal (kurvens tangent) og profilens x- og y-akse. */
+  origin: Vec3;
+  normal: Vec3;
+  x_axis: Vec3;
+  y_axis: Vec3;
 }
 
 export interface AnchorView {
@@ -93,6 +127,14 @@ export interface SplineView {
   anchors: AnchorView[];
   profiles: StationView[];
   flat_end: boolean;
+  /** Navnet brukeren har gitt splinen; tomt når den ikke har fått navn. */
+  name: string;
+  /** Rotsplinen i laget splinen hører til. */
+  layer: number;
+  /** Laget er skjult eller låst. */
+  hidden: boolean;
+  locked: boolean;
+  orientation: Orientation;
 }
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };
@@ -118,8 +160,9 @@ export interface DocumentState {
 }
 
 export type GeometryResult =
-  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; created: number | null }
+  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; registry: RegistryEntry[]; created: number | null }
   | { kind: 'preview'; shape: number; mesh: MeshResult }
+  | { kind: 'project'; text: string }
   | { kind: 'skeletonPreview'; skeleton: SplineView[]; shapes: { shape: number; mesh: MeshResult | null }[] };
 
 export type GeometryResponse =

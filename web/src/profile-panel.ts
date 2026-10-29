@@ -1,5 +1,5 @@
 import { ProfileEditor } from './profile-editor';
-import { PRESETS, removePoint, setKind } from './profile-math';
+import { removePoint, setKind } from './profile-math';
 import type { Profile, SkeletonEdit, SplineView, StationView } from './protocol';
 import type { SkeletonView } from './skeleton-view';
 
@@ -32,7 +32,6 @@ export class ProfilePanel {
   clip: Clip | null = null;
   private select = $<HTMLSelectElement>('#station-select');
   private add = $<HTMLButtonElement>('#add-profile');
-  private preset = $<HTMLSelectElement>('#profile-preset');
   private draw = $<HTMLButtonElement>('#draw-profile');
   private pointKind = $<HTMLButtonElement>('#point-kind');
   private removePointButton = $<HTMLButtonElement>('#remove-point');
@@ -59,7 +58,6 @@ export class ProfilePanel {
       selectionChanged: () => this.updatePointButtons(),
       status: cb.status,
     });
-    for (const name of Object.keys(PRESETS)) this.preset.append(new Option(name, name));
 
     this.select.addEventListener('change', () => {
       const sel = view.selection;
@@ -71,20 +69,15 @@ export class ProfilePanel {
       const s = this.spline();
       if (s) this.addAt(s, this.anchorAt(s));
     });
-    this.preset.addEventListener('change', () => {
-      const name = this.preset.value;
-      this.preset.value = '';
-      if (PRESETS[name] && this.current()) cb.commit(this.profileEdit(PRESETS[name]()), `Kontur: ${name}`);
-    });
     this.draw.addEventListener('click', () => {
       if (this.editor.isDrawing) this.editor.stopDrawing();
       else this.editor.startDrawing();
-      this.draw.textContent = this.editor.isDrawing ? 'Avbryt' : 'Tegn nytt';
+      this.draw.textContent = this.editor.isDrawing ? 'Avbryt' : 'Tegn nytt omriss';
     });
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && this.editor.isDrawing) {
         this.editor.stopDrawing();
-        this.draw.textContent = 'Tegn nytt';
+        this.draw.textContent = 'Tegn nytt omriss';
       }
     });
     this.pointKind.addEventListener('click', () => {
@@ -157,13 +150,13 @@ export class ProfilePanel {
   }
 
   /** Plassen til valgt ankerpunkt, ellers midt på splinen. */
-  private anchorAt(s: SplineView) {
+  anchorAt(s: SplineView) {
     const i = this.view.selection?.index;
     return i != null && s.anchors[i] ? s.anchors[i].at : 0.5;
   }
 
   /** Plassen en ny kontur i `at` får etter sorteringen i kjernen. */
-  private static indexFor(s: SplineView, at: number) {
+  static indexFor(s: SplineView, at: number) {
     return s.profiles.filter((p) => p.at <= at).length;
   }
 
@@ -172,7 +165,7 @@ export class ProfilePanel {
   }
 
   /** Redigeringen som lagrer et nytt omriss for valgt kontur eller dens master. */
-  private profileEdit(profile: Profile): SkeletonEdit {
+  profileEdit(profile: Profile): SkeletonEdit {
     const c = this.current()!;
     if (this.linkedEditable(c)) return { kind: 'setMaster', master: c.station.master!, profile };
     return { kind: 'setProfile', spline: c.spline.id, station: c.index, profile };
@@ -247,7 +240,7 @@ export class ProfilePanel {
     this.add.disabled = !s;
     this.flatEnd.disabled = !s;
     this.flatEnd.checked = !!s?.flat_end;
-    for (const el of [this.preset, this.draw, this.at, this.scale, this.rotation, this.copy, this.remove, this.makeMaster]) {
+    for (const el of [this.draw, this.at, this.scale, this.rotation, this.copy, this.remove, this.makeMaster]) {
       el.disabled = !c;
     }
     this.paste.disabled = !s || !this.clip;
@@ -277,7 +270,7 @@ export class ProfilePanel {
     }
     this.editor.set(c ? c.station.profile : null, !!c && linked !== null && !this.editMaster.checked);
     if (!c && this.editor.isDrawing) this.editor.stopDrawing();
-    this.draw.textContent = this.editor.isDrawing ? 'Avbryt' : 'Tegn nytt';
+    this.draw.textContent = this.editor.isDrawing ? 'Avbryt' : 'Tegn nytt omriss';
     this.updatePointButtons();
   }
 }

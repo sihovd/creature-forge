@@ -35,11 +35,19 @@ export class ProfileEditor {
   /** Forrige trykk, for dobbeltklikk. Elementene tegnes på nytt ved hvert
    * trykk, så nettleserens eget dblclick kommer ikke alltid frem. */
   private lastDown: { time: number; x: number; y: number } | null = null;
+  /** Synlig utsnitt i profilplanet: nederste venstre hjørne (y opp), bredde og høyde. */
+  private box = { x: -VIEW, y: -VIEW, w: 2 * VIEW, h: 2 * VIEW };
+  /** Størrelsen på punktene i skjermpiksler (større på modellen, der fingre brukes). */
+  private pointPx: number;
+  /** Et trykk på omrisset setter inn et punkt (i tillegg til dobbeltklikk). */
+  insertOnTap = false;
 
-  constructor(parent: HTMLElement, private cb: ProfileEditorCallbacks) {
+  constructor(parent: HTMLElement, private cb: ProfileEditorCallbacks, options: { className?: string; pointPx?: number } = {}) {
     this.svg = document.createElementNS(SVG, 'svg');
-    this.svg.setAttribute('viewBox', `${-VIEW} ${-VIEW} ${2 * VIEW} ${2 * VIEW}`);
-    this.svg.setAttribute('class', 'profile-svg');
+    this.pointPx = options.pointPx ?? 1.4;
+    this.svg.setAttribute('class', options.className ?? 'profile-svg');
+    this.svg.setAttribute('preserveAspectRatio', 'none');
+    this.applyBox();
     this.svg.setAttribute('role', 'img');
     this.svg.setAttribute('aria-label', 'Tverrsnittsomriss');
     parent.append(this.svg);
@@ -48,6 +56,25 @@ export class ProfileEditor {
     this.svg.addEventListener('pointerup', (e) => this.onUp(e));
     this.svg.addEventListener('pointercancel', () => this.cancelGrab());
     this.render();
+  }
+
+  /**
+   * Utsnittet i profilplanet som fyller hele flaten: `x`, `y` er nederste
+   * venstre hjørne. Brukes når editoren ligger oppå modellen.
+   */
+  setView(x: number, y: number, w: number, h: number) {
+    if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return;
+    const b = this.box;
+    const eps = 1e-6 * w;
+    if (Math.abs(b.x - x) < eps && Math.abs(b.y - y) < eps && Math.abs(b.w - w) < eps && Math.abs(b.h - h) < eps) return;
+    this.box = { x, y, w, h };
+    this.applyBox();
+    this.render();
+  }
+
+  private applyBox() {
+    const b = this.box;
+    this.svg.setAttribute('viewBox', `${b.x} ${-(b.y + b.h)} ${b.w} ${b.h}`);
   }
 
   get isDrawing() {
@@ -78,13 +105,14 @@ export class ProfileEditor {
   /** Musposisjon i profilplanet (y opp). */
   private local(e: { clientX: number; clientY: number }): Vec2 {
     const r = this.svg.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * 2 * VIEW - VIEW;
-    const y = VIEW - ((e.clientY - r.top) / r.height) * 2 * VIEW;
+    const b = this.box;
+    const x = b.x + ((e.clientX - r.left) / r.width) * b.w;
+    const y = b.y + b.h - ((e.clientY - r.top) / r.height) * b.h;
     return [x, y];
   }
 
   private unitsPerPx() {
-    return (2 * VIEW) / Math.max(1, this.svg.getBoundingClientRect().width);
+    return this.box.w / Math.max(1, this.svg.getBoundingClientRect().width);
   }
 
   private pick(q: Vec2): Grab | null {
@@ -138,6 +166,7 @@ export class ProfileEditor {
     }
     if (!this.profile) return;
     const grab = this.pick(q);
+    if (!grab && this.insertOnTap && this.onDoubleClick(q)) return;
     if (grab) this.selected = grab.index;
     this.cb.selectionChanged();
     this.render();
@@ -197,7 +226,7 @@ export class ProfileEditor {
   }
 
   render(work?: Profile) {
-    const p = work ?? this.profile;
+    const p = work ?? this.grab?.work ?? this.profile;
     const el = (name: string, attrs: Record<string, string | number>) => {
       const node = document.createElementNS(SVG, name);
       for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
@@ -205,10 +234,11 @@ export class ProfileEditor {
     };
     // y opp i profilplanet, y ned i SVG.
     const pt = (v: Vec2) => `${v[0]},${-v[1]}`;
-    const u = 0.012 * VIEW;
+    const u = this.pointPx * this.unitsPerPx();
+    const b = this.box;
     const nodes: SVGElement[] = [
-      el('line', { x1: -VIEW, y1: 0, x2: VIEW, y2: 0, class: 'axis' }),
-      el('line', { x1: 0, y1: -VIEW, x2: 0, y2: VIEW, class: 'axis' }),
+      el('line', { x1: b.x, y1: 0, x2: b.x + b.w, y2: 0, class: 'axis' }),
+      el('line', { x1: 0, y1: -(b.y + b.h), x2: 0, y2: -b.y, class: 'axis' }),
       el('circle', { cx: 0, cy: 0, r: 1, class: 'unit' }),
     ];
     if (p) {

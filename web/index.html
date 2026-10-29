@@ -9,18 +9,47 @@
   <body>
     <header class="topbar">
       <span class="brand">Creature Forge</span>
-      <div class="tools" role="toolbar" aria-label="Verktøy">
+      <div class="tools" role="toolbar" aria-label="Fil">
+        <button id="toggle-layers" type="button" class="secondary" aria-controls="layers" aria-expanded="true" title="Vis eller skjul laglisten">Lag</button>
+        <button id="open-project" type="button" class="secondary" title="Åpne prosjekt (Ctrl+O)">Åpne</button>
+        <button id="save-project" type="button" class="secondary" title="Lagre prosjekt (Ctrl+S)" disabled>Lagre</button>
+        <input id="project-file" type="file" accept=".cfproj,application/json" hidden />
+      </div>
+      <div class="tools modes-bar" role="toolbar" aria-label="Verktøy">
+        <button id="tool-select" type="button" class="tool" aria-pressed="true" title="Velg og dra punkter, håndtak og kurver">Velg</button>
+        <button id="tool-bezier" type="button" class="tool" aria-pressed="false" title="Trykk på en kurve for å sette inn et ankerpunkt">Bézier</button>
+        <button id="add-spline" type="button" title="Ny spline: velg uttrekksretning i aksekorset">Ny spline</button>
+      </div>
+      <div class="tools" role="toolbar" aria-label="Historikk">
         <button id="undo" type="button" class="secondary" title="Angre (Ctrl+Z)" disabled>Angre</button>
         <button id="redo" type="button" class="secondary" title="Gjør om (Ctrl+Shift+Z)" disabled>Gjør om</button>
-        <button id="add-sphere" type="button">Legg til kule</button>
       </div>
     </header>
     <div class="workspace">
+      <aside id="layers" class="layers" aria-label="Lag">
+        <h2>Lag</h2>
+        <div id="layer-list"></div>
+      </aside>
       <main id="viewport" class="viewport" data-shape-count="0" data-control-points="0" data-revision="0" data-splines="0">
-        <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Legg til kule» eller «Ny spline» for å begynne.</p>
+        <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Ny spline» for å begynne.</p>
       </main>
       <aside class="panel" aria-label="Egenskaper">
-        <h2>Formgrep</h2>
+        <div class="inspector-head">
+          <h1 id="inspector-title">Ingenting valgt</h1>
+          <p id="inspector-path" class="path"></p>
+        </div>
+        <div id="object-section" hidden>
+          <label>
+            Navn
+            <input id="object-name" class="name" type="text" maxlength="60" autocomplete="off" />
+          </label>
+          <div id="layer-flags" class="row">
+            <label class="check"><input id="layer-hidden" type="checkbox" /> Skjult</label>
+            <label class="check"><input id="layer-locked" type="checkbox" /> Låst</label>
+          </div>
+          <p id="locked-info" class="help locked-info" hidden>Laget er låst. Lås det opp for å redigere.</p>
+        </div>
+        <h2 class="section">Formgrep</h2>
         <label>
           Punktavstand
           <span class="field"><input id="spacing" type="number" min="2" max="40" step="0.5" value="6" inputmode="decimal" /> mm</span>
@@ -29,12 +58,10 @@
           Påvirkningsradius
           <span class="field"><input id="radius" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /> mm</span>
         </label>
+        <fieldset id="edit-sections" class="sections">
         <h2 class="section">Skjelett</h2>
         <div class="row">
-          <button id="add-spline" type="button" title="Ny rotspline">Ny spline</button>
           <button id="add-branch" type="button" title="Ny gren festet til valgt spline" disabled>Ny gren</button>
-        </div>
-        <div class="row">
           <button id="anchor-kind" type="button" title="Bytt mellom mykt punkt og hjørnepunkt" disabled>Hjørnepunkt</button>
           <button id="remove-spline" type="button" title="Slett valgt spline med grener" disabled>Slett</button>
         </div>
@@ -43,17 +70,25 @@
           <span class="field"><input id="thickness" type="number" min="0.5" max="50" step="0.5" value="5" inputmode="decimal" /> mm</span>
         </label>
         <label class="check"><input id="flat-end" type="checkbox" disabled /> Flat ende (hel endeprofil)</label>
+        <div id="branch-section" hidden>
+          <h2 class="section">Gren</h2>
+          <div class="segmented" role="group" aria-label="Hvordan grenen følger forelderen">
+            <button id="orient-follow" type="button" aria-pressed="true" title="Festet og grenens retning følger forelderens rotasjon">Følg forelder</button>
+            <button id="orient-keep" type="button" aria-pressed="false" title="Festet følger forelderen, retningen er fast i rommet">Behold retning</button>
+          </div>
+          <p class="help">Dra grenens feste (det lille punktet ved forelderen) langs forelderen og videre over på andre spliner i laget.</p>
+        </div>
         <h2 class="section">Kontur</h2>
         <div class="row">
           <select id="station-select" aria-label="Valgt kontur" disabled></select>
           <button id="add-profile" type="button" title="Ny kontur (tverrsnitt) på valgt punkt eller midt på splinen" disabled>Ny kontur</button>
         </div>
+        <div class="row">
+          <button id="edit-contour" type="button" title="Rediger konturen direkte på modellen" disabled>Rediger kontur på modellen</button>
+        </div>
         <div id="profile-editor" class="profile-editor"></div>
         <div class="row">
-          <select id="profile-preset" aria-label="Erstatt med ferdig form" disabled>
-            <option value="">Form …</option>
-          </select>
-          <button id="draw-profile" type="button" title="Tegn et nytt lukket omriss som erstatter konturen" disabled>Tegn nytt</button>
+          <button id="draw-profile" type="button" title="Tegn et nytt lukket omriss som erstatter konturen" disabled>Tegn nytt omriss</button>
         </div>
         <div class="row">
           <button id="point-kind" type="button" title="Bytt mellom mykt punkt og hjørnepunkt i konturen" disabled>Hjørnepunkt</button>
@@ -87,8 +122,19 @@
           </select>
         </div>
         <label class="check"><input id="edit-master" type="checkbox" disabled /> Rediger master (endrer alle koblede)</label>
+        <h2 class="section">Konturregister</h2>
+        <div id="registry" class="registry" role="list" aria-label="Konturregister"></div>
+        <p id="registry-help" class="help registry-help">Velg en spline eller kontur for å bruke registeret.</p>
+        <div class="row">
+          <input id="registry-name" class="name wide" type="text" maxlength="60" placeholder="Navn" aria-label="Navn i registeret" autocomplete="off" />
+        </div>
+        <div class="row">
+          <button id="save-profile" type="button" title="Lagre valgt kontur i registeret" disabled>Lagre kontur</button>
+          <button id="save-volume" type="button" title="Lagre alle konturene på splinen som et volum" disabled>Lagre volum</button>
+        </div>
+        </fieldset>
         <p class="help">Konturen er tverrsnittet rundt splinen, tegnet med U mot høyre og V opp. Dra punkter og håndtak, dobbeltklikk på omrisset for et nytt punkt. Mellom to konturer går formen jevnt over. Høyreklikk i arbeidsflaten for hurtigvalg.</p>
-        <p class="help">Alle former har en spline i midten med mesh rundt, også kula. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Dobbeltklikk på kurven for å legge inn et punkt, for eksempel for å bøye videre etter 180°. Grenenes feste dras langs forelderen. Grip kurven til en rotspline for å flytte hele formen. Et punkt som dras nær en annen spline, snapper til den (Shift slår av).</p>
+        <p class="help">Alle former har en spline i midten med mesh rundt. «Ny spline» viser et aksekors der du velger uttrekksretningen. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Med Bézier-verktøyet setter et trykk på kurven inn et nytt punkt uten å endre formen (dobbeltklikk gjør det samme med Velg). Grenenes feste dras langs forelderen. Grip kurven til en rotspline for å flytte hele formen. Et punkt som dras nær en annen spline, snapper til den (Shift slår av). Langt trykk eller høyreklikk gir hurtigvalg.</p>
         <p class="help">Hold over en prikk for å se retningen, og dra for å trekke ut eller presse inn meshen. Prikkene lager ingen spliner. Esc avbryter.</p>
       </aside>
     </div>

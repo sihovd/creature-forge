@@ -268,3 +268,212 @@ body {
   .panel { max-height: 42dvh; }
   .profile-svg { max-width: 240px; }
 }
+
+/* Lagliste, verktøyknapper og aksekors (trinn 2). */
+:root { --accent: #6a4fd8; --accent-soft: #efeafe; --teal: #1fa39b; }
+
+.modes-bar button.tool { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.modes-bar button.tool[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+.workspace { grid-template-columns: 240px 1fr 260px; }
+body.layers-closed .workspace { grid-template-columns: 1fr 260px; }
+body.layers-closed .layers { display: none; }
+
+.layers {
+  padding: 12px 8px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.layers h2 { margin: 0 8px 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+
+.layer-tree { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+
+.layer-tree .row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 0 4px 0 calc(4px + var(--depth) * 16px);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.layer-tree .row:hover { background: #f3f1fa; }
+.layer-tree .row.selected { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.layer-tree .row.dim .row-name { opacity: 0.5; }
+.layer-tree [data-kind='layer'] > .row { font-weight: 600; }
+
+.row-toggle { width: 22px; height: 26px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.row-toggle:disabled { cursor: default; }
+.row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row input.rename { flex: 1; min-width: 0; min-height: 28px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 6px; font: inherit; }
+
+.row-icon { width: 14px; height: 14px; flex: none; border: 2px solid currentColor; opacity: 0.7; }
+.icon-layer { border-radius: 3px; }
+.icon-spline { border-width: 0 0 2px 2px; border-radius: 0 0 0 10px; }
+.icon-branch { border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; transform: scale(0.8); }
+.icon-contour { border-radius: 50%; color: var(--teal); }
+
+.row-tools { display: flex; gap: 2px; }
+.row-tool { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.row-tool svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.row-tool:hover { background: #ebe8f5; }
+.row-tool.on { color: var(--accent); }
+
+.layer-empty { padding: 8px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+.inspector-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.inspector-head .path { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.panel input.name { width: 150px; text-align: left; }
+.panel .locked-info { margin: 0 0 8px; color: var(--accent); }
+fieldset.sections { margin: 0; padding: 0; border: 0; min-width: 0; }
+fieldset.sections:disabled .profile-editor { pointer-events: none; opacity: 0.6; }
+
+.axis-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  min-width: 40px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 2px solid var(--axis);
+  border-radius: 16px;
+  background: #fff;
+  color: var(--axis);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 2;
+}
+.axis-label[hidden] { display: none; }
+.axis-label:hover, .axis-label:focus-visible { background: var(--axis); color: #fff; outline: none; }
+
+.gizmo-bar {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.92);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.1);
+  font-size: 14px;
+  z-index: 2;
+}
+.gizmo-bar[hidden] { display: none; }
+.gizmo-bar button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
+
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 200px 1fr 240px; }
+}
+
+@media (max-width: 640px) {
+  .topbar { flex-wrap: wrap; }
+  .tools { width: auto; }
+  .workspace, body.layers-closed .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr auto; position: relative; }
+  .layers { position: absolute; z-index: 3; left: 0; top: 0; bottom: 0; width: min(80vw, 280px); box-shadow: 4px 0 16px rgb(0 0 0 / 0.12); }
+  .layer-tree .row { min-height: 42px; }
+  .inspector-head h1 { font-size: 16px; }
+  .inspector-head .path { margin-bottom: 6px; }
+}
+
+.panel .row button { white-space: nowrap; padding: 0 6px; }
+
+@media (max-width: 640px) {
+  .topbar { gap: 6px; padding: 6px 8px; }
+  .tools { gap: 4px; }
+  .tools button { min-height: 36px; padding: 0 9px; font-size: 14px; }
+}
+
+.axis-free {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  cursor: grab;
+  touch-action: none;
+  z-index: 3;
+}
+.axis-free[hidden] { display: none; }
+.axis-free:active { cursor: grabbing; }
+
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.segmented button { min-height: 36px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.segmented button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.segmented button:disabled { opacity: 0.45; cursor: default; }
+
+/* Konturredigering på modellen (trinn 4). */
+.contour-overlay { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.contour-overlay[hidden] { display: none; }
+.profile-svg.on-model { max-width: none; width: 100%; height: 100%; aspect-ratio: auto; border: 0; border-radius: 0; background: transparent; pointer-events: none; }
+.profile-svg.on-model.drawing-mode { pointer-events: all; cursor: crosshair; }
+.profile-svg.on-model * { vector-effect: non-scaling-stroke; }
+.profile-svg.on-model .axis { stroke: rgb(124 77 255 / 0.25); stroke-width: 1; }
+.profile-svg.on-model .unit { stroke: rgb(124 77 255 / 0.3); stroke-width: 1; }
+.profile-svg.on-model .outline { fill: rgb(124 77 255 / 0.12); stroke: #7c4dff; stroke-width: 2.5; pointer-events: stroke; }
+.profile-svg.on-model .point { fill: #fff; stroke: #7c4dff; stroke-width: 2; pointer-events: all; }
+.profile-svg.on-model .point.first { stroke-width: 3.5; }
+.profile-svg.on-model .point.active { fill: #7c4dff; stroke: #7c4dff; }
+.profile-svg.on-model .handle { fill: #12a39a; pointer-events: all; }
+.profile-svg.on-model .handle-line { stroke: #12a39a; stroke-width: 1.5; }
+.profile-svg.on-model .drawing { stroke: #7c4dff; stroke-width: 2; }
+.profile-svg.on-model .empty { display: none; }
+
+.contour-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: grid;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.95);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
+  font-size: 14px;
+}
+.contour-bar[hidden] { display: none; }
+.contour-bar.linked .contour-info { color: #b4401f; font-weight: 600; }
+.contour-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.contour-tools button { min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
+.contour-tools button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.contour-tools button:disabled { opacity: 0.45; cursor: default; }
+.contour-tools button[hidden] { display: none; }
+.contour-tools button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+body.contour-editing .empty-hint { display: none; }
+
+@media (max-width: 640px) {
+  body.contour-editing .panel { display: none; }
+  .contour-bar { left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none; padding: 6px 8px; font-size: 13px; }
+  .contour-tools button { min-height: 40px; padding: 0 8px; font-size: 13px; }
+}
+
+/* Konturregister (trinn 5). */
+.registry { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.registry .tile { position: relative; }
+.registry .tile > button:first-child { display: grid; justify-items: center; gap: 2px; width: 100%; padding: 6px 2px 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; font-size: 11px; color: var(--text); cursor: pointer; }
+.registry .tile > button:first-child:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.registry .tile > button:disabled { opacity: 0.5; cursor: default; }
+.registry .tile svg { width: 32px; height: 32px; }
+.registry .tile polygon { fill: rgb(124 77 255 / 0.12); stroke: #7c4dff; stroke-width: 0.08; stroke-linejoin: round; }
+.registry .tile.volume polygon { fill: rgb(18 163 154 / 0.15); stroke: var(--teal); }
+.registry .tile span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.registry .tile-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.panel .registry-help { margin: 0 0 8px; }
+.panel input.name.wide { width: 100%; }
