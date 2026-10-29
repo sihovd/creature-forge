@@ -11,6 +11,7 @@
 
 use crate::curve::{add, mat_vec, rotation_between, scale};
 use crate::mesh::{cross, dot, length, normalize, sub, Vec3};
+use crate::profile::{MasterId, Profile, ProfileShape, ResolvedStation, Station};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -73,8 +74,15 @@ pub struct Spline {
     pub attachment: Option<Attachment>,
     /// Referanseretning for rammen i starten av en rotspline.
     pub up: Vec3,
-    /// Tykkelse i mm. Foreløpig radien til et sirkeltverrsnitt.
+    /// Tykkelse i mm: radien til et sirkeltverrsnitt, og målestokken for
+    /// profilene.
     pub thickness: f64,
+    /// Tverrsnittsprofiler sortert etter plass langs kurven. Tom: sirkel.
+    #[serde(default)]
+    pub profiles: Vec<Station>,
+    /// Flat ende med hele endeprofilen i stedet for en avrundet ende.
+    #[serde(default)]
+    pub flat_end: bool,
 }
 
 /// Ortonormal ramme: tangent T og tverretningene U og V.
@@ -477,12 +485,67 @@ pub enum SkeletonEdit {
         spline: SplineId,
         at: f64,
     },
+    /// Flytter en rotspline med alle grener.
+    Translate {
+        spline: SplineId,
+        delta: Vec3,
+    },
     SetThickness {
         spline: SplineId,
         thickness: f64,
     },
     Remove {
         spline: SplineId,
+    },
+    /// Ny profilstasjon i andelen `at`. Med `from` limes en kopi av den
+    /// stasjonen inn (omriss, størrelse, rotasjon og masterkobling); ellers
+    /// en kopi av profilen slik den er der i dag.
+    AddProfile {
+        spline: SplineId,
+        at: f64,
+        from: Option<usize>,
+    },
+    /// Nytt eget omriss for en stasjon. En koblet stasjon blir individuell.
+    SetProfile {
+        spline: SplineId,
+        station: usize,
+        profile: Profile,
+    },
+    /// Plass, størrelse og rotasjon for en stasjon.
+    SetStation {
+        spline: SplineId,
+        station: usize,
+        at: f64,
+        scale: f64,
+        rotation: f64,
+    },
+    RemoveProfile {
+        spline: SplineId,
+        station: usize,
+    },
+    /// Gjør omrisset til stasjonen til en ny master og kobler stasjonen til den.
+    MakeMaster {
+        spline: SplineId,
+        station: usize,
+    },
+    LinkMaster {
+        spline: SplineId,
+        station: usize,
+        master: MasterId,
+    },
+    /// Kobler fra masteren og beholder gjeldende omriss.
+    Unlink {
+        spline: SplineId,
+        station: usize,
+    },
+    /// Endrer masterens omriss; alle koblede stasjoner følger.
+    SetMaster {
+        master: MasterId,
+        profile: Profile,
+    },
+    SetFlatEnd {
+        spline: SplineId,
+        flat: bool,
     },
     Batch {
         edits: Vec<SkeletonEdit>,
@@ -613,8 +676,112 @@ impl Skeleton {
                 self.set_world_anchors(spline, anchors)?
             }
             E::Reattach { spline, at } => self.reattach(spline, at)?,
+            E::Translate { spline, delta } => self.translate(spline, delta)?,
             E::SetThickness { spline, thickness } => self.set_thickness(spline, thickness)?,
             E::Remove { spline } => self.remove(spline)?,
+            E::AddProfile { spline, at, from } => {
+                if !(0.0..=1.0).contains(&at) {
+                    return Err("Profilen må ligge på splinen".into());
+                }
+                let station = match from {
+                    Some(i) => Station {
+                        at,
+                        ..self.station(spline, i)?.clone()
+                    },
+                    None => {
+                        let current = self.resolved_profiles(spline)?;
+                        let near = current
+                            .iter()
+                            .min_by(|a, b| (a.at - at).abs().total_cmp(&(b.at - at).abs()));
+                        match near {
+                            Some(s) => Station {
+                                at,
+                                shape: ProfileShape::Own {
+                                    profile: s.profile.clone(),
+                                },
+                                scale: s.scale,
+                                rotation: s.rotation,
+                            },
+                            None => Station::new(at, Profile::circle()),
+                        }
+                    }
+                };
+                self.update(spline, |s| {
+                    s.profiles.push(station);
+                    s.profiles.sort_by(|a, b| a.at.total_cmp(&b.at));
+                })?
+            }
+            E::SetProfile {
+                spline,
+                station,
+                ref profile,
+            } => {
+                self.station(spline, station)?;
+                let profile = profile.clone();
+                self.update(spline, |s| {
+                    s.profiles[station].shape = ProfileShape::Own { profile }
+                })?
+            }
+            E::SetStation {
+                spline,
+                station,
+                at,
+                scale,
+                rotation,
+            } => {
+                self.station(spline, station)?;
+                self.update(spline, |s| {
+                    let st = &mut s.profiles[station];
+                    st.at = at;
+                    st.scale = scale;
+                    st.rotation = rotation;
+                    s.profiles.sort_by(|a, b| a.at.total_cmp(&b.at));
+                })?
+            }
+            E::RemoveProfile { spline, station } => {
+                self.station(spline, station)?;
+                self.update(spline, |s| {
+                    s.profiles.remove(station);
+                })?
+            }
+            E::MakeMaster { spline, station } => {
+                let profile = self.station_profile(self.station(spline, station)?)?;
+                let master = self.masters.keys().next_back().map_or(1, |k| k + 1);
+                self.masters.insert(master, profile);
+                self.update(spline, |s| {
+                    s.profiles[station].shape = ProfileShape::Master { master }
+                })?
+            }
+            E::LinkMaster {
+                spline,
+                station,
+                master,
+            } => {
+                self.station(spline, station)?;
+                if !self.masters.contains_key(&master) {
+                    return Err("Masteren finnes ikke".into());
+                }
+                self.update(spline, |s| {
+                    s.profiles[station].shape = ProfileShape::Master { master }
+                })?
+            }
+            E::Unlink { spline, station } => {
+                let profile = self.station_profile(self.station(spline, station)?)?;
+                self.update(spline, |s| {
+                    s.profiles[station].shape = ProfileShape::Own { profile }
+                })?
+            }
+            E::SetMaster {
+                master,
+                ref profile,
+            } => {
+                if !self.masters.contains_key(&master) {
+                    return Err("Masteren finnes ikke".into());
+                }
+                profile.validate()?;
+                self.masters.insert(master, profile.clone());
+            }
+            E::SetFlatEnd { spline, flat } => self.update(spline, |s| s.flat_end = flat)?,
             E::Batch { ref edits } => {
                 let mut created = None;
                 for e in edits {
@@ -638,6 +805,21 @@ pub struct SplineView {
     /// Punkter langs kurven for tegning.
     pub points: Vec<Vec3>,
     pub anchors: Vec<AnchorView>,
+    pub profiles: Vec<StationView>,
+    pub flat_end: bool,
+}
+
+/// En profilstasjon slik visningen og profileditoren trenger den.
+#[derive(Clone, Debug, Serialize)]
+pub struct StationView {
+    pub at: f64,
+    pub scale: f64,
+    pub rotation: f64,
+    pub master: Option<MasterId>,
+    /// Omrisset i enheter av tykkelsen, uten størrelse og rotasjon.
+    pub profile: Profile,
+    /// Omrisset i verdenskoordinater, for tegning rundt kurven.
+    pub ring: Vec<Vec3>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -659,7 +841,7 @@ pub const VIEW_POINTS_PER_SEGMENT: usize = 24;
 impl Skeleton {
     pub fn view(&self) -> Result<Vec<SplineView>, String> {
         let world = self.evaluate()?;
-        Ok(world
+        world
             .iter()
             .map(|(id, w)| {
                 let spline = &self.splines[id];
@@ -689,7 +871,36 @@ impl Skeleton {
                         }
                     })
                     .collect();
-                SplineView {
+                let profiles = spline
+                    .profiles
+                    .iter()
+                    .map(|st| {
+                        let profile = self.station_profile(st)?;
+                        let frame = w.frame_at(st.at);
+                        let (sin, cos) = st.rotation.sin_cos();
+                        let k = st.scale * spline.thickness;
+                        let ring = profile
+                            .polygon()
+                            .iter()
+                            .map(|p| {
+                                let (x, y) = (cos * p[0] - sin * p[1], sin * p[0] + cos * p[1]);
+                                frame.to_world([x * k, y * k, 0.0])
+                            })
+                            .collect();
+                        Ok(StationView {
+                            at: st.at,
+                            scale: st.scale,
+                            rotation: st.rotation,
+                            master: match st.shape {
+                                ProfileShape::Master { master } => Some(master),
+                                ProfileShape::Own { .. } => None,
+                            },
+                            profile,
+                            ring,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(SplineView {
                     id: *id,
                     parent: spline.attachment.map(|a| a.parent),
                     at: spline.attachment.map_or(0.0, |a| a.at),
@@ -697,9 +908,11 @@ impl Skeleton {
                     length: w.length,
                     points,
                     anchors,
-                }
+                    profiles,
+                    flat_end: spline.flat_end,
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -708,6 +921,9 @@ impl Skeleton {
 pub struct Skeleton {
     next_id: SplineId,
     splines: BTreeMap<SplineId, Spline>,
+    /// Masterprofiler som stasjoner kan kobles til.
+    #[serde(default)]
+    masters: BTreeMap<MasterId, Profile>,
 }
 
 /// Filformatet for et skjelett. Inngår senere i prosjektfilen.
@@ -726,6 +942,7 @@ impl Skeleton {
         Skeleton {
             next_id: 1,
             splines: BTreeMap::new(),
+            masters: BTreeMap::new(),
         }
     }
 
@@ -767,6 +984,8 @@ impl Skeleton {
             attachment: None,
             up,
             thickness,
+            profiles: Vec::new(),
+            flat_end: false,
         };
         self.insert(spline)
     }
@@ -787,6 +1006,8 @@ impl Skeleton {
             attachment: Some(attachment),
             up: [0.0, 0.0, 1.0],
             thickness,
+            profiles: Vec::new(),
+            flat_end: false,
         };
         self.insert(spline)
     }
@@ -965,6 +1186,47 @@ impl Skeleton {
         self.update(id, |s| s.thickness = thickness)
     }
 
+    fn station(&self, spline: SplineId, i: usize) -> Result<&Station, String> {
+        self.splines
+            .get(&spline)
+            .ok_or("Splinen finnes ikke")?
+            .profiles
+            .get(i)
+            .ok_or_else(|| "Profilen finnes ikke".into())
+    }
+
+    /// Omrisset til en stasjon, med masteren slått opp.
+    pub fn station_profile(&self, station: &Station) -> Result<Profile, String> {
+        match &station.shape {
+            ProfileShape::Own { profile } => Ok(profile.clone()),
+            ProfileShape::Master { master } => self
+                .masters
+                .get(master)
+                .cloned()
+                .ok_or_else(|| "Masteren finnes ikke".into()),
+        }
+    }
+
+    /// Stasjonene til en spline med omrissene slått opp, sortert etter plass.
+    pub fn resolved_profiles(&self, spline: SplineId) -> Result<Vec<ResolvedStation>, String> {
+        let s = self.splines.get(&spline).ok_or("Splinen finnes ikke")?;
+        s.profiles
+            .iter()
+            .map(|st| {
+                Ok(ResolvedStation {
+                    at: st.at,
+                    profile: self.station_profile(st)?,
+                    scale: st.scale,
+                    rotation: st.rotation,
+                })
+            })
+            .collect()
+    }
+
+    pub fn masters(&self) -> &BTreeMap<MasterId, Profile> {
+        &self.masters
+    }
+
     /// Endrer en spline og godtar endringen bare hvis hele skjelettet er gyldig.
     fn update(&mut self, id: SplineId, f: impl FnOnce(&mut Spline)) -> Result<(), String> {
         let mut next = self.clone();
@@ -989,6 +1251,13 @@ impl Skeleton {
             }
             if !(s.thickness.is_finite() && s.thickness >= 0.0) {
                 return Err(format!("Spline {id} har ugyldig tykkelse"));
+            }
+            for st in &s.profiles {
+                st.validate()?;
+                self.station_profile(st)?;
+            }
+            if s.profiles.windows(2).any(|w| w[0].at > w[1].at) {
+                return Err(format!("Profilene i spline {id} er ikke sortert"));
             }
             if let Some(a) = s.attachment {
                 if !self.splines.contains_key(&a.parent) {
@@ -1017,6 +1286,9 @@ impl Skeleton {
             if *id >= self.next_id {
                 return Err("Ugyldig id i skjelettet".into());
             }
+        }
+        for m in self.masters.values() {
+            m.validate()?;
         }
         self.evaluate().map(|_| ())
     }
@@ -1436,5 +1708,143 @@ mod tests {
         .unwrap();
         sk.apply(&edit).unwrap();
         assert_eq!(sk.spline(root).unwrap().anchors[1].kind, AnchorKind::Corner);
+    }
+
+    #[test]
+    fn master_styrer_koblede_profiler_og_lokal_storrelse_bevares() {
+        use crate::profile::Profile;
+        let mut sk = Skeleton::new();
+        let id = sk
+            .apply(&SkeletonEdit::AddRoot {
+                start: [0.0; 3],
+                direction: [1.0, 0.0, 0.0],
+                length: 50.0,
+                thickness: 5.0,
+            })
+            .unwrap()
+            .unwrap();
+        let e = |edit: SkeletonEdit, sk: &mut Skeleton| sk.apply(&edit).unwrap();
+        e(
+            SkeletonEdit::AddProfile {
+                spline: id,
+                at: 0.2,
+                from: None,
+            },
+            &mut sk,
+        );
+        e(
+            SkeletonEdit::SetProfile {
+                spline: id,
+                station: 0,
+                profile: Profile::h_shape(),
+            },
+            &mut sk,
+        );
+        e(
+            SkeletonEdit::MakeMaster {
+                spline: id,
+                station: 0,
+            },
+            &mut sk,
+        );
+        // Kopier og lim inn lenger ut: kopien er koblet til samme master.
+        e(
+            SkeletonEdit::AddProfile {
+                spline: id,
+                at: 0.8,
+                from: Some(0),
+            },
+            &mut sk,
+        );
+        e(
+            SkeletonEdit::SetStation {
+                spline: id,
+                station: 1,
+                at: 0.8,
+                scale: 2.0,
+                rotation: 0.3,
+            },
+            &mut sk,
+        );
+        let view = sk.view().unwrap();
+        let st = &view[0].profiles;
+        assert_eq!(st.len(), 2);
+        assert_eq!(st[0].master, Some(1));
+        assert_eq!(st[1].master, Some(1));
+        assert_eq!(st[0].scale, 1.0);
+
+        // Endre masteren: begge følger, og lokal størrelse er uendret.
+        e(
+            SkeletonEdit::SetMaster {
+                master: 1,
+                profile: Profile::ellipse(1.0, 0.5),
+            },
+            &mut sk,
+        );
+        let view = sk.view().unwrap();
+        for s in &view[0].profiles {
+            assert_eq!(s.profile, Profile::ellipse(1.0, 0.5));
+        }
+        assert_eq!(view[0].profiles[1].scale, 2.0);
+
+        // Gjør individuell: beholder formen, senere masterendringer påvirker den ikke.
+        e(
+            SkeletonEdit::Unlink {
+                spline: id,
+                station: 1,
+            },
+            &mut sk,
+        );
+        e(
+            SkeletonEdit::SetMaster {
+                master: 1,
+                profile: Profile::circle(),
+            },
+            &mut sk,
+        );
+        let view = sk.view().unwrap();
+        assert_eq!(view[0].profiles[0].profile, Profile::circle());
+        assert_eq!(view[0].profiles[1].profile, Profile::ellipse(1.0, 0.5));
+        assert_eq!(view[0].profiles[1].master, None);
+
+        // Lagring og åpning beholder profiler og masterkoblinger.
+        let back = Skeleton::from_json(&sk.to_json()).unwrap();
+        assert_eq!(back, sk);
+        // Et selvkryssende omriss avvises og endrer ingenting.
+        let bow = Profile {
+            points: [[1.0, 1.0], [-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0]]
+                .iter()
+                .map(|p| crate::profile::ProfilePoint::corner(*p))
+                .collect(),
+        };
+        assert!(sk
+            .apply(&SkeletonEdit::SetProfile {
+                spline: id,
+                station: 0,
+                profile: bow
+            })
+            .is_err());
+        assert_eq!(sk, back);
+    }
+
+    #[test]
+    fn eldre_filer_uten_profiler_kan_aapnes() {
+        let mut sk = Skeleton::new();
+        sk.apply(&SkeletonEdit::AddRoot {
+            start: [0.0; 3],
+            direction: [0.0, 1.0, 0.0],
+            length: 10.0,
+            thickness: 2.0,
+        })
+        .unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&sk.to_json()).unwrap();
+        let obj = json["skeleton"].as_object_mut().unwrap();
+        obj.remove("masters");
+        for (_, s) in obj["splines"].as_object_mut().unwrap() {
+            let s = s.as_object_mut().unwrap();
+            s.remove("profiles");
+            s.remove("flat_end");
+        }
+        assert_eq!(Skeleton::from_json(&json.to_string()).unwrap(), sk);
     }
 }

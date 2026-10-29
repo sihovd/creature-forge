@@ -196,6 +196,31 @@ export class Viewport {
     return !!hit && hit.distance < dist - 0.5;
   }
 
+  /** Formen og punktet under pekeren, eller null. */
+  raycast(clientX: number, clientY: number): { shape: number; point: THREE.Vector3 } | null {
+    this.setRay(clientX, clientY);
+    const hit = this.raycaster.intersectObjects([...this.shapes.values()], false)[0];
+    return hit ? { shape: hit.object.userData.shape as number, point: hit.point } : null;
+  }
+
+  /** Punktet på gulvet (y = 0) under pekeren, eller null. */
+  groundPoint(clientX: number, clientY: number): THREE.Vector3 | null {
+    this.setRay(clientX, clientY);
+    return this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+  }
+
+  /** Flytter kameraet tilbake til utgangsvisningen. */
+  resetView() {
+    this.camera.position.set(75, 70, 105);
+    this.controls.target.set(0, 25, 0);
+  }
+
+  private setRay(clientX: number, clientY: number) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+  }
+
   /** Antall skjermpiksler per millimeter ved et punkt i scenen. */
   pixelsPerMm(p: THREE.Vector3) {
     const dist = p.distanceTo(this.camera.position);

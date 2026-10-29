@@ -8,6 +8,7 @@ pub mod bend;
 pub mod curve;
 pub mod document;
 pub mod mesh;
+pub mod profile;
 pub mod pull;
 pub mod refine;
 pub mod skeleton;
@@ -72,7 +73,7 @@ pub fn create_sphere(radius_mm: f64, target_edge_mm: f64) -> Result<MeshBuffers,
 /// Versjonen av geometriberegningene. Lagres i prosjektfiler (kap. 19).
 #[wasm_bindgen(js_name = geometryVersion)]
 pub fn geometry_version() -> u32 {
-    4
+    5
 }
 
 /// Dokumentet slik grensesnittet ser det gjennom workeren.
