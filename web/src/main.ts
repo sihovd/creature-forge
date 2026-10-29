@@ -1,7 +1,7 @@
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
 import type { Command, GeometryResult, PullParams, SkeletonEdit, Vec3 } from './protocol';
-import { PullTool, type PanelMode } from './pull-tool';
+import { PullTool } from './pull-tool';
 import { SkeletonTool } from './skeleton-tool';
 import { SkeletonView } from './skeleton-view';
 import { Viewport } from './viewport';
@@ -17,8 +17,6 @@ const undoButton = $<HTMLButtonElement>('#undo');
 const redoButton = $<HTMLButtonElement>('#redo');
 const spacingInput = $<HTMLInputElement>('#spacing');
 const radiusInput = $<HTMLInputElement>('#radius');
-const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
-const showCenterlines = $<HTMLInputElement>('#show-centerlines');
 const addSpline = $<HTMLButtonElement>('#add-spline');
 const addBranch = $<HTMLButtonElement>('#add-branch');
 const anchorKind = $<HTMLButtonElement>('#anchor-kind');
@@ -43,6 +41,7 @@ function apply(result: GeometryResult) {
   }
   if (result.kind === 'skeletonPreview') {
     skeleton.set(result.skeleton);
+    for (const s of result.shapes) viewport.setShapeMesh(s.shape, s.mesh);
     return;
   }
   skeleton.set(result.skeleton);
@@ -53,13 +52,11 @@ function apply(result: GeometryResult) {
   for (const s of result.shapes) {
     triangles += viewport.setShapeMesh(s.shape, s.mesh);
     viewport.setControlPoints(s.shape, s.controlPoints);
-    viewport.setCenterlines(s.shape, s.centerlines);
   }
   undoButton.disabled = !result.state.canUndo;
   redoButton.disabled = !result.state.canRedo;
   container.dataset.shapeCount = String(viewport.shapeCount);
   container.dataset.controlPoints = String(viewport.controlPointCount);
-  container.dataset.centerlines = String(viewport.centerlineCount);
   container.dataset.revision = String(result.state.revision);
   hint.hidden = viewport.shapeCount > 0 || skeleton.count > 0;
   return triangles;
@@ -77,16 +74,16 @@ async function run(command: Command, describe: (triangles: number, ms: number) =
 }
 
 // Forhåndsvisning under drag: bare én forespørsel om gangen, og bare det siste grepet sendes.
-let queuedPreview: { shape: number; pull: PullParams; target: number | null } | null = null;
+let queuedPreview: { shape: number; pull: PullParams } | null = null;
 let previewInFlight = false;
 async function pumpPreview() {
   if (previewInFlight || !queuedPreview) return;
-  const { shape, pull, target } = queuedPreview;
+  const { shape, pull } = queuedPreview;
   queuedPreview = null;
   previewInFlight = true;
   try {
     const { result } = await geometry.send(
-      target === null ? { kind: 'previewPull', shape, pull } : { kind: 'previewEdit', shape, target, pull },
+{ kind: 'previewPull', shape, pull },
     );
     if (tool.dragging) apply(result);
   } catch {
@@ -97,14 +94,6 @@ async function pumpPreview() {
   }
 }
 
-let panelMode: PanelMode = 'pull';
-for (const b of modeButtons) {
-  b.addEventListener('click', () => {
-    panelMode = b.dataset.mode as PanelMode;
-    for (const other of modeButtons) other.setAttribute('aria-pressed', String(other === b));
-  });
-}
-showCenterlines.addEventListener('change', () => viewport.setCenterlinesVisible(showCenterlines.checked));
 
 function updateSkeletonPanel() {
   const sel = skeleton.selection;
@@ -155,7 +144,8 @@ addBranch.addEventListener('click', () => {
   const dir = viewport.projector.cameraRight.clone().projectOnPlane(tangent);
   if (dir.lengthSq() < 1e-6) dir.copy(viewport.projector.cameraUp).projectOnPlane(tangent);
   editSkeleton(
-    { kind: 'addChild', parent: parent.id, at, direction: arr(dir.normalize()), length: 20, thickness: readMm(thicknessInput, 5) * 0.6 },
+    // Lang nok til å stikke ut av forelderens mesh.
+    { kind: 'addChild', parent: parent.id, at, direction: arr(dir.normalize()), length: parent.thickness + 20, thickness: parent.thickness * 0.6 },
     'Ny gren',
   );
 });
@@ -185,26 +175,16 @@ thicknessInput.addEventListener('change', () => {
 
 const tool = new PullTool(viewport, {
   radiusMm: () => readMm(radiusInput, 12),
-  panelMode: () => panelMode,
-  preview: (shape, pull, target) => {
-    queuedPreview = { shape, pull, target };
+  preview: (shape, pull) => {
+    queuedPreview = { shape, pull };
     pumpPreview();
   },
-  commit: (shape, pull, target) => {
+  commit: (shape, pull) => {
     queuedPreview = null;
     const [ax, ay, az, nx, ny, nz, bx, by, bz] = pull;
-    const ab = Math.hypot(bx - ax, by - ay, bz - az);
     const along = (bx - ax) * nx + (by - ay) * ny + (bz - az) * nz;
-    const what =
-      target !== null
-        ? `Endret senterlinjen (A–B ${ab.toFixed(1)} mm)`
-        : Math.abs(ab - Math.abs(along)) < 0.01
-          ? `${along >= 0 ? 'Trakk ut' : 'Presset inn'} ${Math.abs(along).toFixed(1)} mm`
-          : `Trakk ut og bøyde (A–B ${ab.toFixed(1)} mm)`;
-    run(
-      target === null ? { kind: 'commitPull', shape, pull } : { kind: 'commitEdit', shape, target, pull },
-      (t, ms) => `${what} · ${fmt(t)} trekanter · ${ms.toFixed(0)} ms`,
-    );
+    const what = `${along >= 0 ? 'Trakk ut' : 'Presset inn'} ${Math.abs(along).toFixed(1)} mm`;
+    run({ kind: 'commitPull', shape, pull }, (t, ms) => `${what} · ${fmt(t)} trekanter · ${ms.toFixed(0)} ms`);
   },
   // Gjenoppretter siste bekreftede mesh ved å hente formen på nytt.
   cancel: () => {
@@ -265,7 +245,6 @@ declare global {
   interface Window {
     creatureForgeTest?: {
       gripNearCenter(): { x: number; y: number } | null;
-      firstCenterlineTip(): { x: number; y: number } | null;
       splineAnchor(spline: number, index: number): { x: number; y: number } | null;
       splineLength(spline: number): number | null;
     };
@@ -291,12 +270,5 @@ window.creatureForgeTest = {
   },
   splineLength(spline) {
     return skeleton.spline(spline)?.length ?? null;
-  },
-  firstCenterlineTip() {
-    const rect = viewport.renderer.domElement.getBoundingClientRect();
-    const line = viewport.pickCenterlineTip(0, 0, Infinity);
-    if (!line) return null;
-    const s = viewport.toScreen(line.tip);
-    return { x: rect.left + s.x, y: rect.top + s.y };
   },
 };

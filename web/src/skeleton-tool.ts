@@ -86,6 +86,8 @@ export class SkeletonTool {
     // Skjelettet ligger oppå formene og har forrang foran formgrep og kamera.
     e.stopImmediatePropagation();
     this.viewport.controls.enabled = false;
+    // Kontrollpunktene gjelder meshen før draget og skjules til den er beregnet på nytt.
+    this.viewport.setControlPointsVisible(false);
     this.viewport.renderer.domElement.setPointerCapture(e.pointerId);
     this.latest = this.view.splines;
     const mouse = new THREE.Vector2(e.clientX, e.clientY);
@@ -296,6 +298,7 @@ export class SkeletonTool {
     this.queued = null;
     this.view.hideBend();
     this.viewport.controls.enabled = true;
+    this.viewport.setControlPointsVisible(true);
     const el = this.viewport.renderer.domElement;
     if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
   }

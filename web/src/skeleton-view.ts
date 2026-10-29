@@ -119,9 +119,11 @@ export class SkeletonView {
     const mouse = this.mouse(clientX, clientY);
     let best: SkeletonPick | null = null;
     let bestDist = maxPx;
+    // Ved lik avstand vinner det siste punktet, så tuppen på en kort spline
+    // (som i en kule) kan gripes selv om den ligger oppå roten.
     const consider = (pick: SkeletonPick) => {
       const d = this.viewport.toScreen(pick.position).distanceTo(mouse);
-      if (d < bestDist) {
+      if (d <= bestDist) {
         best = pick;
         bestDist = d;
       }

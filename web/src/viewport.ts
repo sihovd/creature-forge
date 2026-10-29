@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Projector } from './grip-math';
-import { CENTERLINE_SAMPLES, CENTERLINE_STRIDE, type MeshResult } from './protocol';
+import type { MeshResult } from './protocol';
 
 export interface ControlPoint {
   shape: number;
@@ -9,19 +9,8 @@ export interface ControlPoint {
   normal: THREE.Vector3;
 }
 
-/** En varig senterlinje fra et uttrekk. `target` er uttrekkets plass i historikken. */
-export interface Centerline {
-  shape: number;
-  target: number;
-  radius: number;
-  anchor: THREE.Vector3;
-  normal: THREE.Vector3;
-  tip: THREE.Vector3;
-}
-
 const POINT_COLOR = 0x5d6b62;
 const ACTIVE_COLOR = 0xd2652d;
-const CENTERLINE_COLOR = 0x2f6f5e;
 
 /** 3D-arbeidsflaten. Én scene-enhet er én millimeter. */
 export class Viewport {
@@ -38,17 +27,6 @@ export class Viewport {
   private arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 10, ACTIVE_COLOR, 3, 2);
   private influence: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
-  private centerlines = new Map<number, Centerline[]>();
-  private centerlineGroup = new THREE.Group();
-  private handleGeometry = new THREE.SphereGeometry(1.1, 16, 12);
-  private lineMaterial = new THREE.LineBasicMaterial({ color: CENTERLINE_COLOR, depthTest: false, transparent: true, opacity: 0.9 });
-  private handleMaterial = new THREE.MeshBasicMaterial({ color: CENTERLINE_COLOR, depthTest: false });
-  private rootMaterial = new THREE.MeshBasicMaterial({ color: CENTERLINE_COLOR, depthTest: false, transparent: true, opacity: 0.5 });
-  private guide = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-    new THREE.LineDashedMaterial({ color: ACTIVE_COLOR, dashSize: 1.5, gapSize: 1, depthTest: false }),
-  );
-
   constructor(private container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -73,10 +51,7 @@ export class Viewport {
     );
     this.arrow.visible = false;
     this.influence.visible = false;
-    this.guide.visible = false;
-    this.guide.renderOrder = 2;
-    this.centerlineGroup.renderOrder = 1;
-    this.scene.add(this.pointMarkers, this.arrow, this.influence, this.centerlineGroup, this.guide);
+    this.scene.add(this.pointMarkers, this.arrow, this.influence);
 
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
@@ -137,84 +112,6 @@ export class Viewport {
 
   setControlPointsVisible(visible: boolean) {
     this.pointMarkers.visible = visible;
-  }
-
-  get centerlineCount() {
-    let n = 0;
-    for (const c of this.centerlines.values()) n += c.length;
-    return n;
-  }
-
-  setCenterlines(shape: number, data: Float64Array) {
-    const lines: Centerline[] = [];
-    const v = (i: number) => new THREE.Vector3(data[i], data[i + 1], data[i + 2]);
-    for (let o = 0; o + CENTERLINE_STRIDE <= data.length; o += CENTERLINE_STRIDE) {
-      lines.push({ shape, target: data[o], radius: data[o + 1], anchor: v(o + 2), normal: v(o + 5), tip: v(o + 8) });
-    }
-    if (lines.length) this.centerlines.set(shape, lines);
-    else this.centerlines.delete(shape);
-    this.rebuildCenterlines(data, shape);
-  }
-
-  setCenterlinesVisible(visible: boolean) {
-    this.centerlineGroup.visible = visible;
-  }
-
-  private rebuildCenterlines(data: Float64Array, shape: number) {
-    for (const child of [...this.centerlineGroup.children]) {
-      if (child.userData.shape === shape) {
-        this.centerlineGroup.remove(child);
-        if (child instanceof THREE.Line) child.geometry.dispose();
-      }
-    }
-    for (let o = 0; o + CENTERLINE_STRIDE <= data.length; o += CENTERLINE_STRIDE) {
-      const pts: THREE.Vector3[] = [];
-      for (let i = 0; i < CENTERLINE_SAMPLES; i++) {
-        const k = o + 11 + i * 3;
-        pts.push(new THREE.Vector3(data[k], data[k + 1], data[k + 2]));
-      }
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), this.lineMaterial);
-      const tip = new THREE.Mesh(this.handleGeometry, this.handleMaterial);
-      tip.position.copy(pts[pts.length - 1]);
-      const root = new THREE.Mesh(this.handleGeometry, this.rootMaterial);
-      root.position.copy(pts[0]);
-      root.scale.setScalar(0.6);
-      for (const obj of [line, tip, root]) {
-        obj.userData.shape = shape;
-        obj.renderOrder = 1;
-        this.centerlineGroup.add(obj);
-      }
-    }
-  }
-
-  /** Nærmeste tupp av en senterlinje innenfor `maxPx` piksler fra pekeren. */
-  pickCenterlineTip(clientX: number, clientY: number, maxPx: number): Centerline | null {
-    if (!this.centerlineGroup.visible) return null;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    const mouse = new THREE.Vector2(clientX - rect.left, clientY - rect.top);
-    let best: Centerline | null = null;
-    let bestDist = maxPx;
-    for (const lines of this.centerlines.values()) {
-      for (const c of lines) {
-        const d = this.toScreen(c.tip).distanceTo(mouse);
-        if (d < bestDist) {
-          best = c;
-          bestDist = d;
-        }
-      }
-    }
-    return best;
-  }
-
-  /** Stiplet linje fra roten A til grepet B under et drag. */
-  showGuide(from: THREE.Vector3, to: THREE.Vector3) {
-    this.guide.geometry.setFromPoints([from, to]);
-    this.guide.computeLineDistances();
-    this.guide.visible = true;
-  }
-
-  hideGuide() {
-    this.guide.visible = false;
   }
 
   /** Kameraet slik grepsberegningene trenger det. */
