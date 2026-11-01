@@ -1495,6 +1495,12 @@ impl Skeleton {
         }
     }
 
+    /// Id-en neste nye spline får. Grensesnittet bruker den til å lage en
+    /// spline og endre den i samme `Batch`, så det blir ett angresteg.
+    pub fn next_id(&self) -> SplineId {
+        self.next_id.max(1)
+    }
+
     pub fn ids(&self) -> Vec<SplineId> {
         self.splines.keys().copied().collect()
     }

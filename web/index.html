@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Creature Forge</title>
+    <link rel="icon" href="./logo.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
@@ -15,16 +16,49 @@
       </div>
     </div>
     <header class="topbar">
-      <span class="brand">Creature Forge</span>
-      <div class="tools" role="toolbar" aria-label="Fil">
-        <button id="toggle-layers" type="button" class="secondary" aria-controls="layers" aria-expanded="true" title="Vis eller skjul laglisten">Lag</button>
-        <button id="open-project" type="button" class="secondary" title="Åpne prosjekt (Ctrl+O)">Åpne</button>
-        <button id="save-project" type="button" class="secondary" title="Lagre prosjekt (Ctrl+S)" disabled>Lagre</button>
-        <input id="project-file" type="file" accept=".cfproj,application/json" hidden />
+      <div class="topbar-start">
+        <span class="brand">
+          <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+            <defs>
+              <linearGradient id="logo-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#9b82ff" />
+                <stop offset="1" stop-color="#5f3fe0" />
+              </linearGradient>
+            </defs>
+            <path fill="url(#logo-fill)" d="M3.5 3.2 11 9.6a14 14 0 0 1 10 0l7.5-6.4-1 11.6c0 7.6-4.9 12.6-11.5 14.4C9.4 27.4 4.5 22.4 4.5 14.8z" />
+            <path fill="#fff" d="m9.6 15.6 4.6 1.6-.6 1.7-4.4-1zm12.8 0-4.6 1.6.6 1.7 4.4-1z" />
+          </svg>
+          <span class="brand-name">Creature Forge</span>
+        </span>
+        <span class="divider" aria-hidden="true"></span>
+        <div class="project">
+          <input id="project-name" class="project-name" value="Ny skapning" aria-label="Navn på skapningen" maxlength="60" spellcheck="false" autocomplete="off" />
+          <button id="project-menu-button" type="button" class="icon-button small" aria-label="Skapningsmeny" aria-haspopup="menu" aria-expanded="false" title="Skapningsmeny">
+            <i data-lucide="chevron-down"></i>
+          </button>
+          <div id="project-menu" class="menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-action="rename"><i data-lucide="pencil"></i>Gi nytt navn</button>
+            <button type="button" role="menuitem" data-action="open"><i data-lucide="folder-open"></i>Åpne prosjektfil …<kbd>Ctrl+O</kbd></button>
+            <button type="button" role="menuitem" data-action="save"><i data-lucide="save"></i>Lagre prosjektfil<kbd>Ctrl+S</kbd></button>
+            <hr />
+            <button type="button" role="menuitem" data-action="export"><i data-lucide="upload"></i>Eksporter som STL</button>
+          </div>
+        </div>
       </div>
-      <div class="tools" role="toolbar" aria-label="Historikk">
-        <button id="undo" type="button" class="secondary" title="Angre (Ctrl+Z)" disabled>Angre</button>
-        <button id="redo" type="button" class="secondary" title="Gjør om (Ctrl+Shift+Z)" disabled>Gjør om</button>
+      <div class="topbar-center" role="toolbar" aria-label="Historikk">
+        <button id="undo" type="button" class="icon-button" aria-label="Angre" title="Angre (Ctrl+Z)" disabled><i data-lucide="undo-2"></i></button>
+        <button id="redo" type="button" class="icon-button" aria-label="Gjør om" title="Gjør om (Ctrl+Shift+Z)" disabled><i data-lucide="redo-2"></i></button>
+      </div>
+      <div class="topbar-end" role="toolbar" aria-label="Fil og visning">
+        <button id="open-project" type="button" class="icon-button" aria-label="Åpne" title="Åpne prosjekt (Ctrl+O)"><i data-lucide="folder-open"></i></button>
+        <button id="save-project" type="button" class="icon-button" aria-label="Lagre" title="Lagre prosjekt (Ctrl+S)" disabled><i data-lucide="save"></i></button>
+        <input id="project-file" type="file" accept=".cfproj,application/json" hidden />
+        <span class="divider" aria-hidden="true"></span>
+        <button id="toggle-wireframe" type="button" class="icon-button" aria-label="Vis trådnett" aria-pressed="false" title="Vis trådnett"><i data-lucide="monitor"></i></button>
+        <button id="toggle-theme" type="button" class="icon-button" aria-label="Mørkt tema" aria-pressed="false" title="Bytt mellom lyst og mørkt tema"><i data-lucide="sun" class="when-light"></i><i data-lucide="moon" class="when-dark"></i></button>
+        <button id="toggle-layers" type="button" class="icon-button" aria-label="Lagliste" aria-controls="layers" aria-expanded="true" title="Vis eller skjul laglisten"><i data-lucide="layout-grid"></i></button>
+        <span class="divider" aria-hidden="true"></span>
+        <button id="export" type="button" class="primary" aria-label="Eksporter" title="Last ned de synlige formene som STL for 3D-utskrift" disabled><i data-lucide="upload"></i><span>Eksporter</span></button>
       </div>
     </header>
     <div class="workspace">
@@ -38,15 +72,89 @@
         <button id="tool-mirror" type="button" class="tool" aria-pressed="false" title="Speilmodus: alt speiles om planet x = 0"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20" stroke-dasharray="2 2" fill="none"/><path d="M9 6L3 18h6zM15 6l6 12h-6z"/></svg><span>Speil</span></button>
         <button id="open-settings" type="button" class="tool" title="Innstillinger (mesh)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" fill="none"/></svg><span>Innstillinger</span></button>
       </nav>
-      <aside id="layers" class="layers" aria-label="Lag">
-        <h2>Lag</h2>
-        <div id="layer-list"></div>
+      <aside id="layers" class="layers" aria-labelledby="layers-title">
+        <div class="panel-header">
+          <h2 id="layers-title">Lag</h2>
+          <button id="add-layer" type="button" class="icon-button outlined" aria-label="Legg til grunnform" title="Legg til en grunnform"><i data-lucide="plus"></i></button>
+        </div>
+        <div class="panel-body">
+          <div id="layers-empty" class="empty-state">
+            <i data-lucide="box"></i>
+            <p class="empty-title">Ingen lag ennå</p>
+            <p class="empty-text">Legg til en grunnform for å begynne å bygge skapningen din.</p>
+          </div>
+          <div id="layer-list"></div>
+        </div>
       </aside>
+      <div class="stage">
       <main id="viewport" class="viewport" data-shape-count="0" data-control-points="0" data-revision="0" data-splines="0">
-        <p id="empty-hint" class="empty-hint">Arbeidsrommet er tomt. Velg «Ny spline» for å begynne.</p>
+        <div id="empty-hint" class="empty-hint">
+          <i data-lucide="box"></i>
+          <p class="empty-title">Legg til din første grunnform</p>
+          <p class="empty-text">Velg en grunnform nedenfor, eller «Ny spline» i verktøylinjen.</p>
+        </div>
+        <p id="status" class="status" aria-live="polite">Starter geometrikjernen …</p>
+        <div class="view-controls" role="group" aria-label="Kamera">
+          <div class="stack">
+            <button id="zoom-in" type="button" class="icon-button" aria-label="Zoom inn" title="Zoom inn"><i data-lucide="plus"></i></button>
+            <button id="zoom-out" type="button" class="icon-button" aria-label="Zoom ut" title="Zoom ut"><i data-lucide="minus"></i></button>
+          </div>
+          <button id="zoom-fit" type="button" class="icon-button single" aria-label="Tilpass visningen" title="Tilpass visningen til formene (F)"><i data-lucide="scan-search"></i></button>
+        </div>
+        <section class="palette" aria-label="Palett">
+          <div class="palette-tabs" role="tablist" aria-label="Palett">
+            <button type="button" role="tab" id="tab-shapes" aria-label="Grunnformer" aria-controls="pane-shapes" aria-selected="true"><i data-lucide="box"></i><span>Grunnformer</span></button>
+            <button type="button" role="tab" id="tab-details" aria-label="Detaljer" aria-controls="pane-details" aria-selected="false" tabindex="-1"><i data-lucide="sparkles"></i><span>Detaljer</span></button>
+            <button type="button" role="tab" id="tab-joints" aria-label="Ledd" aria-controls="pane-joints" aria-selected="false" tabindex="-1"><i data-lucide="link"></i><span>Ledd</span></button>
+            <button type="button" role="tab" id="tab-control" aria-label="Kontroll" aria-controls="pane-control" aria-selected="false" tabindex="-1"><i data-lucide="settings"></i><span>Kontroll</span></button>
+          </div>
+          <div class="palette-pane" role="tabpanel" id="pane-shapes" aria-labelledby="tab-shapes">
+            <div class="shape-cards">
+              <button type="button" class="shape-card" data-primitive="sphere" disabled><span class="thumb" style="background-image: url(./shapes/sphere.png)"></span><span>Kule</span></button>
+              <button type="button" class="shape-card" data-primitive="capsule" disabled><span class="thumb" style="background-image: url(./shapes/capsule.png)"></span><span>Kapsel</span></button>
+              <button type="button" class="shape-card" data-primitive="cone" disabled><span class="thumb" style="background-image: url(./shapes/cone.png)"></span><span>Kjegle</span></button>
+              <button type="button" class="shape-card" data-primitive="box" disabled><span class="thumb" style="background-image: url(./shapes/box.png)"></span><span>Boks</span></button>
+            </div>
+          </div>
+          <div class="palette-pane" role="tabpanel" id="pane-details" aria-labelledby="tab-details" hidden>
+            <div id="detail-cards" class="detail-cards"></div>
+            <p class="palette-help">Velg en spline, og sett inn en ferdig mesh-del på den. Flere detaljer kan importeres i inspektøren.</p>
+          </div>
+          <div class="palette-pane" role="tabpanel" id="pane-joints" aria-labelledby="tab-joints" hidden>
+            <div class="coming">
+              <i data-lucide="link"></i>
+              <p><strong>Ledd kommer senere.</strong> Koblingspunkter og hengsler gjør figuren bevegelig etter utskrift.</p>
+            </div>
+          </div>
+          <div class="palette-pane" role="tabpanel" id="pane-control" aria-labelledby="tab-control" hidden>
+            <div class="control-grid">
+              <label class="field">
+                <span>Punktavstand</span>
+                <span class="input-unit"><input id="spacing" type="number" min="2" max="40" step="0.5" value="6" inputmode="decimal" /><span>mm</span></span>
+              </label>
+              <label class="field">
+                <span>Påvirkningsradius</span>
+                <span class="input-unit"><input id="radius" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /><span>mm</span></span>
+              </label>
+            </div>
+            <p class="palette-help">Prikkene på formen er formgrep: dra en prikk for å trekke ut eller presse inn meshen. Punktavstanden endrer bare grepene, ikke formen. Esc avbryter.</p>
+          </div>
+        </section>
       </main>
-      <aside class="panel" aria-label="Egenskaper">
-        <div class="inspector-head">
+      <!-- Utenfor arbeidsflaten, så lerretet der er det eneste i #viewport. -->
+      <div id="view-cube" class="view-cube" title="Trykk på en side av kuben for å se fra den retningen"></div>
+      </div>
+      <aside class="panel" aria-labelledby="inspector-label">
+        <div class="panel-header">
+          <h2 id="inspector-label">Inspektør</h2>
+        </div>
+        <div class="panel-body">
+        <div id="inspector-empty" class="empty-state">
+          <i data-lucide="mouse-pointer-2"></i>
+          <p class="empty-title">Velg en del</p>
+          <p class="empty-text">Klikk på en form i scenen eller et lag i listen for å se og redigere egenskapene her.</p>
+        </div>
+        <div class="inspector-head" id="inspector-head" hidden>
           <h1 id="inspector-title">Ingenting valgt</h1>
           <p id="inspector-path" class="path"></p>
         </div>
@@ -74,16 +182,7 @@
             </div>
           </div>
         </div>
-        <h2 class="section">Formgrep</h2>
-        <label>
-          Punktavstand
-          <span class="field"><input id="spacing" type="number" min="2" max="40" step="0.5" value="6" inputmode="decimal" /> mm</span>
-        </label>
-        <label>
-          Påvirkningsradius
-          <span class="field"><input id="radius" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /> mm</span>
-        </label>
-        <fieldset id="edit-sections" class="sections">
+        <fieldset id="edit-sections" class="sections" hidden>
         <h2 class="section">Skjelett</h2>
         <div class="row">
           <button id="add-branch" type="button" title="Ny gren festet til valgt spline" disabled>Ny gren</button>
@@ -169,9 +268,13 @@
           <button id="save-volume" type="button" title="Lagre alle konturene på splinen som et volum" disabled>Lagre volum</button>
         </div>
         </fieldset>
+        <details class="help-box">
+        <summary>Hjelp</summary>
         <p class="help">Konturen er tverrsnittet rundt splinen, tegnet med U mot høyre og V opp. Dra punkter og håndtak, dobbeltklikk på omrisset for et nytt punkt. Mellom to konturer går formen jevnt over. Høyreklikk i arbeidsflaten for hurtigvalg.</p>
         <p class="help">Alle former har en spline i midten med mesh rundt. «Ny spline» viser et aksekors der du velger uttrekksretningen. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Med Bézier-verktøyet setter et trykk på kurven inn et nytt punkt uten å endre formen (dobbeltklikk gjør det samme med Velg). Grenenes feste dras langs forelderen. Grip kurven til en rotspline for å flytte hele formen. Punkter flyttes fritt; hold Alt for å flytte i xyz-planet som vender mest mot kameraet. Et punkt som dras nær en annen spline, snapper til den (Shift slår av), og tuppen kobles da fast til den, så spliner kan danne et nett. En kontur kan dras over på en annen spline. Langt trykk eller høyreklikk gir hurtigvalg.</p>
         <p class="help">Hold over en prikk for å se retningen, og dra for å trekke ut eller presse inn meshen. Prikkene lager ingen spliner. Esc avbryter.</p>
+        </details>
+        </div>
       </aside>
     </div>
     <dialog id="settings" class="settings" aria-labelledby="settings-title">
@@ -197,7 +300,6 @@
         <div class="row end"><button id="close-settings" value="close">Lukk</button></div>
       </form>
     </dialog>
-    <footer id="status" class="status" aria-live="polite">Starter geometrikjernen …</footer>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

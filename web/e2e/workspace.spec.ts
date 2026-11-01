@@ -35,6 +35,7 @@ test('CF02: punktavstand endrer grepene, ikke formen', async ({ page }) => {
   await addSphere(page);
   const before = Number(await viewport(page).getAttribute('data-control-points'));
   const revision = await viewport(page).getAttribute('data-revision');
+  await page.getByRole('tab', { name: 'Kontroll' }).click();
   await page.locator('#spacing').fill('12');
   await page.locator('#spacing').press('Enter');
   await expect(page.locator('#status')).toContainText('Punktavstand 12 mm');

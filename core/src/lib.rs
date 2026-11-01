@@ -169,6 +169,12 @@ impl JsDocument {
         view_json(self.0.skeleton())
     }
 
+    /// Id-en neste nye spline får (se `Skeleton::next_id`).
+    #[wasm_bindgen(js_name = nextSplineId)]
+    pub fn next_spline_id(&self) -> u32 {
+        self.0.skeleton().next_id()
+    }
+
     /// Konturregisteret som JSON (se `skeleton::RegistryView`).
     #[wasm_bindgen(js_name = registryView)]
     pub fn registry_view(&self) -> Result<String, JsError> {

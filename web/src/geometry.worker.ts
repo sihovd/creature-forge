@@ -53,6 +53,7 @@ function documentResult(shapes: number[], spacingMm: number, created: number | n
     registry: JSON.parse(doc.registryView()),
     library: JSON.parse(doc.libraryView()),
     created,
+    nextSpline: doc.nextSplineId(),
   };
 }
 
