@@ -53,7 +53,7 @@ npm install
 npm run core             # bygger Rust-kjernen til web/src/core-pkg
 npm run dev              # utviklingsserver på http://localhost:5173
 npm test                 # enhetstester for grepsberegningene
-npm run build && npm run test:e2e   # nettlesertester (desktop og mobil)
+npm run build && npm run test:e2e   # nettlesertester (desktop, iPad Pro og telefonsperre)
 ```
 
 ## Sentrale krav

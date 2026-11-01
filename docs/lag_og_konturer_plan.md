@@ -101,6 +101,10 @@ Et sammenhengende startsett på omtrent 30 ikoner, blant annet spline, gren, kon
 
 Mirror (til laginndelingen fungerer), frihåndstegning av barnesplines med penn eller finger, og valg av tegneplan for nye spliner.
 
+## Plattform (Sivert 2026-10-30)
+
+Appen skal ikke fungere på telefon, fordi skjermen er for liten. Desktop er hovedmålet, og iPad Pro er det minste støttede nettbrettet. Vinduer under 700 × 480 px viser meldingen «Skjermen er for liten» i stedet for editoren. Mobiloppsettet for telefon (laglisteskuff, kompakt toppfelt) er fjernet. Playwright tester berøring på iPad Pro 11 (834 × 1194) og bare sperremeldingen på telefon. Konturredigeringen tilpasser zoomen til både bredde og høyde, slik at konturen får plass på et smalt lerret når nettbrettet står på høykant.
+
 ## 8 Trinn 6: nett, knekker, mesh-deler og speil (Sivert 30. oktober 2026)
 
 - **Nett av spliner** (`Spline::end`). Når tuppen dras og snapper til en annen spline, festes enden der (`AttachEnd`). Tuppen følger punktet når den andre splinen endres, også når det er morsplinen eller en spline i et annet lag. Splinene evalueres i avhengighetsrekkefølge, og koblinger som ville gått i sløyfe avvises. Å dra, trekke ut eller bøye tuppen løsner enden; «Løsne enden» finnes i hurtigmenyen. Lagene smeltes ikke sammen: hver rot er fortsatt én kropp, men en kropp beregnes på nytt når en spline i den flytter seg fordi et annet lag endres.

@@ -15,7 +15,9 @@ test('et lag trekkes fra et annet og kan slås av, skjules og angres', async ({ 
   expect(whole).toBeGreaterThan(100);
 
   // Lag 2 gjøres om til en negativ form med knappen på lagraden.
+  // Knappen vises på laget som er valgt.
   const row = await layerRow(page, 'l2');
+  await row.locator('.row-name').click();
   await row.locator('[data-action="cut"]').click();
   await expect(viewport(page)).toHaveAttribute('data-cutters', '1');
   await expect(row.locator('.cut-badge')).toHaveText('− 1');
@@ -26,7 +28,7 @@ test('et lag trekkes fra et annet og kan slås av, skjules og angres', async ({ 
   expect((await shape(page, 2)).visible).toBe(true);
 
   // Inspektøren: kuttemålet er valgt, og utskjæringen kan slås av uten å skjule kutteren.
-  await row.click();
+  await row.locator('.row-name').click();
   await closeLayersOnMobile(page, isMobile);
   await expect(page.locator('#cut-subtract')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#cut-targets input[data-target="1"]')).toBeChecked();

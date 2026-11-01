@@ -146,8 +146,12 @@ export class LayerPanel {
       }
       const tools = document.createElement('span');
       tools.className = 'row-tools';
+      // «＋/−» vises på negative former og på laget som er valgt, så smale
+      // lister (nettbrett) har plass til å trykke på selve raden.
+      if (r.cut || (sel?.layer && sel.spline === r.id)) {
+        tools.append(this.textButton('cut', r.cut ? 'Trekk fra (bytt til Legg til)' : 'Legg til (bytt til Trekk fra)', r.cut ? '−' : '＋', !!r.cut));
+      }
       tools.append(
-        this.textButton('cut', r.cut ? 'Trekk fra (bytt til Legg til)' : 'Legg til (bytt til Trekk fra)', r.cut ? '−' : '＋', !!r.cut),
         this.toolButton('hide', r.hidden ? 'Vis laget' : 'Skjul laget', r.hidden ? SVG_EYE_OFF : SVG_EYE, r.hidden),
         this.toolButton('lock', r.locked ? 'Lås opp laget' : 'Lås laget', r.locked ? SVG_LOCK : SVG_UNLOCK, r.locked),
       );

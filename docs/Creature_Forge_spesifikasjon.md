@@ -20,7 +20,7 @@ Krav beskriver tiltenkt ferdig program. Dokumentet hevder ikke at funksjonene er
 
 ## 1 Formål og produktgrenser
 
-**K.** Hovedplattformen er nettleser på PC og Mac, med mobilstøtte. Programmet skal ha reelle redigeringsverktøy og en produksjonsrettet geometrikjerne. Det skal ikke bygges som en visuell mockup som senere må erstattes.
+**K.** Hovedplattformen er nettleser på PC og Mac. Store nettbrett som iPad Pro støttes med berøring og penn. Telefoner støttes ikke fordi skjermen er for liten (Sivert 2026-10-30); de får en melding om å bruke en større skjerm. Programmet skal ha reelle redigeringsverktøy og en produksjonsrettet geometrikjerne. Det skal ikke bygges som en visuell mockup som senere må erstattes.
 
 Brukeren skal kunne starte med en kule, forme en kropp, tegne opphøyde eller nedsenkede detaljer og bygge en skapning av flere kroppsdeler. Det samme arbeidsprinsippet skal fungere på en kropp, et hode, en hale og detaljer som ører eller horn. Geometrien skal forbli redigerbar når nye lag og koblinger kommer til.
 
@@ -355,6 +355,8 @@ Tunge geometrioperasjoner kjører i en Web Worker. Kommunikasjonen bruker versjo
 Serverbasert geometri er ikke en vedtatt forutsetning. Hvis enkelte operasjoner senere krever server, må dette spesifiseres som en synlig produktavhengighet med håndtering av frakobling, ventetid og modelloverføring.
 
 ## 18 Brukergrensesnitt og mobilbetjening
+
+> Avklaring 2026-10-30: «mobil» i dette kapitlet betyr nettbrett på iPad Pro-størrelse. Telefoner (bredde under 700 px eller høyde under 480 px) sperres med en melding om for liten skjerm.
 
 **B.** Retningen er et lyst, rolig og profesjonelt grensesnitt med stor 3D-arbeidsflate. Kroppsdeler og modellbibliotek kan ligge nederst, Features i et eget panel og egenskapene til aktivt objekt til høyre. Bare én undermeny skal være åpen av gangen. Funksjonsikoner skal være SVG; modellminiatyrer skal avspeile faktisk geometri.
 

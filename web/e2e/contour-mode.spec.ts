@@ -138,7 +138,7 @@ test.describe('med mus', () => {
 });
 
 test('langt trykk på en kontur gir «Rediger kontur» på touch', async ({ page, isMobile }) => {
-  test.skip(!isMobile, 'Berøring testes på mobil');
+  test.skip(!isMobile, 'Berøring testes på iPad');
   await page.goto('/');
   await newSpline(page);
   await page.locator('#thickness').fill('15');
@@ -155,8 +155,26 @@ test('langt trykk på en kontur gir «Rediger kontur» på touch', async ({ page
   await expect(menu(page)).toBeVisible();
   await menu(page).getByRole('menuitem', { name: 'Rediger kontur' }).first().tap();
   await expect(viewport(page)).toHaveAttribute('data-contour-mode', 'on');
-  // Panelet er skjult på små skjermer, og «Ferdig» er synlig og kan trykkes.
-  await expect(page.locator('.panel')).toBeHidden();
+  // «Ferdig» er synlig og kan trykkes.
   await page.locator('.contour-bar').getByRole('button', { name: 'Ferdig' }).tap();
   await expect(viewport(page)).not.toHaveAttribute('data-contour-mode', 'on');
+});
+
+test('konturen får plass på lerretet også på smalt nettbrett på høykant', async ({ page }) => {
+  await page.setViewportSize({ width: 834, height: 1194 });
+  await page.goto('/');
+  await newSpline(page);
+  await page.locator('#thickness').fill('15');
+  await page.locator('#thickness').press('Enter');
+  await expect(status(page)).toContainText('Tykkelse 15 mm');
+  await page.getByRole('button', { name: 'Ny kontur' }).click();
+  await page.getByRole('button', { name: 'Rediger kontur på modellen' }).click();
+  await expect(viewport(page)).toHaveAttribute('data-contour-mode', 'on');
+  const canvas = (await page.locator('#viewport canvas').boundingBox())!;
+  const points = page.locator('.profile-svg.on-model .point');
+  await expect(points).toHaveCount(4);
+  for (const b of await points.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()))) {
+    expect(b.left).toBeGreaterThanOrEqual(canvas.x);
+    expect(b.right).toBeLessThanOrEqual(canvas.x + canvas.width);
+  }
 });
