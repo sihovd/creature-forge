@@ -10,6 +10,8 @@ export default defineConfig({
   },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobil', use: { ...devices['Pixel 7'] } },
+    // Telefoner støttes ikke; berøring testes på iPad Pro (Chromium, for CDP-touch).
+    { name: 'ipad', use: { ...devices['iPad Pro 11'], browserName: 'chromium' } },
+    { name: 'telefon', use: { ...devices['Pixel 7'] }, testMatch: /small-screen\.spec\.ts/ },
   ],
 });
