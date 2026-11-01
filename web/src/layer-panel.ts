@@ -132,24 +132,24 @@ export class LayerPanel {
         icon: r.cut ? 'cutter' : 'layer',
         dim: r.hidden,
       });
-      if (r.cut) {
-        // Tydelig minusmerke, og hvor mange lag formen skjærer i.
-        const row = li.querySelector('.row')!;
-        row.classList.add('cutter');
-        const badge = document.createElement('span');
-        badge.className = `cut-badge${r.cut.active ? '' : ' off'}`;
-        badge.textContent = r.cut.active ? `− ${r.cut.targets.length}` : '− av';
-        badge.title = r.cut.active
-          ? `Negativ form: skjærer i ${r.cut.targets.length} lag`
-          : 'Negativ form: utskjæringen er slått av';
-        row.querySelector('.row-name')?.after(badge);
-      }
+      if (r.cut) li.querySelector('.row')!.classList.add('cutter');
       const tools = document.createElement('span');
       tools.className = 'row-tools';
       // «＋/−» vises på negative former og på laget som er valgt, så smale
       // lister (nettbrett) har plass til å trykke på selve raden.
       if (r.cut || (sel?.layer && sel.spline === r.id)) {
-        tools.append(this.textButton('cut', r.cut ? 'Trekk fra (bytt til Legg til)' : 'Legg til (bytt til Trekk fra)', r.cut ? '−' : '＋', !!r.cut));
+        // Minusmerket på en negativ form; tittelen sier hvor mange lag den skjærer i.
+        const label = !r.cut
+          ? 'Legg til (bytt til Trekk fra)'
+          : r.cut.active
+            ? `Trekk fra: skjærer i ${r.cut.targets.length} lag (bytt til Legg til)`
+            : 'Trekk fra: utskjæringen er slått av (bytt til Legg til)';
+        const b = this.textButton('cut', label, r.cut ? '−' : '＋', !!r.cut);
+        if (r.cut) {
+          b.dataset.targets = String(r.cut.targets.length);
+          if (!r.cut.active) b.classList.add('off');
+        }
+        tools.append(b);
       }
       tools.append(
         this.toolButton('hide', r.hidden ? 'Vis laget' : 'Skjul laget', r.hidden ? SVG_EYE_OFF : SVG_EYE, r.hidden),

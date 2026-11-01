@@ -24,7 +24,8 @@ Implementert:
 
 - Et lag kan være en negativ form (`Spline.cut` på rotsplinen, redigeringen
   `SetCut`). Lagraden har en knapp «＋»/«−» som bytter mellom «Legg til» og
-  «Trekk fra», og en negativ form har minusmerke med antall mål («− 2»).
+  «Trekk fra». En negativ form har et fylt lilla minusmerke på raden; tittelen
+  sier hvor mange lag den skjærer i. «＋» vises bare på laget som er valgt.
 - Kuttemålene er en eksplisitt liste over lag. Når et lag gjøres om, foreslås
   lagene det overlapper (med speilbildet i speilmodus). Listen vises og
   endres i inspektøren under «Kutter i». Forelder og feste er en annen

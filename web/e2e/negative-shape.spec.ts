@@ -20,7 +20,9 @@ test('et lag trekkes fra et annet og kan slås av, skjules og angres', async ({ 
   await row.locator('.row-name').click();
   await row.locator('[data-action="cut"]').click();
   await expect(viewport(page)).toHaveAttribute('data-cutters', '1');
-  await expect(row.locator('.cut-badge')).toHaveText('− 1');
+  await expect(row.locator('[data-action="cut"]')).toHaveText('−');
+  await expect(row.locator('[data-action="cut"]')).toHaveAttribute('data-targets', '1');
+  await expect(row.locator('.row-name')).toBeVisible();
   // Den tynnere kutteren ligger langs samme akse og skjærer et hull gjennom lag 1.
   await expect.poll(async () => (await shape(page, 1)).triangles).not.toBe(whole);
   const cut = (await shape(page, 1)).triangles;

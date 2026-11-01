@@ -299,11 +299,11 @@ body.layers-closed .layers { display: none; }
 .icon-contour { border-radius: 50%; color: var(--teal); }
 .icon-cutter { border-radius: 3px; border-style: dashed; color: #8a5cd6; }
 
-/* Negativ form: minusmerke og gjennomsiktig farge i listen. */
-.cut-badge { flex: none; padding: 0 6px; border-radius: 9px; background: #8a5cd6; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; }
-.cut-badge.off { background: #c9bfe0; }
+/* Negativ form: minusmerke i listen. */
 .row-tool.row-mode { font-size: 17px; font-weight: 700; line-height: 1; }
-.row-tool.row-mode.on { color: #8a5cd6; }
+.row-tool.row-mode.on { color: #fff; background: #8a5cd6; }
+.row-tool.row-mode.on.off { background: #c9bfe0; }
+.layer-tree .row.cutter .row-name { color: #6b47b8; }
 
 .cut-section { margin: 4px 0 10px; }
 .cut-section .mode { display: flex; gap: 4px; margin-bottom: 6px; }
