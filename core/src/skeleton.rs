@@ -116,6 +116,34 @@ pub struct Spline {
     /// Ferdige 3D-mesher (horn, klør, øyne …) satt inn langs splinen.
     #[serde(default)]
     pub parts: Vec<Part>,
+    /// Laget trekkes fra andre lag (negativ form). Gjelder bare rotspliner.
+    #[serde(default)]
+    pub cut: Option<Cut>,
+}
+
+/// Et lag som trekkes fra («− Trekk fra») i stedet for å legges til
+/// (issue #12 punkt 4). Formen forblir et redigerbart lag. Hva den skjærer i
+/// er en egen relasjon, uavhengig av forelder, feste og rekkefølgen i
+/// laglisten, så omorganisering endrer aldri hvilke deler som kuttes.
+/// Utskjæringen skjer i avstandsfeltet; skjelettet og festene i målet
+/// berøres ikke, så splinefester blir stående selv om materialet rundt dem
+/// fjernes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cut {
+    /// Lagene (rotsplinene) formen skjærer i.
+    #[serde(default)]
+    pub targets: Vec<SplineId>,
+    /// Utskjæringen er aktiv. Av: kutteren vises, men skjærer ikke.
+    /// Om kutteren vises styres separat av lagets synlighet.
+    #[serde(default = "default_true")]
+    pub active: bool,
+    /// Skarp kant mot kuttet i stedet for myk overgang.
+    #[serde(default)]
+    pub sharp: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Hvor en mesh-del kommer fra: de innebygde formene eller en importert mesh.
@@ -725,6 +753,12 @@ pub enum SkeletonEdit {
     RemoveEntry {
         entry: u32,
     },
+    /// Gjør laget med rotsplinen `spline` til en negativ form som skjærer i
+    /// lagene i `cut.targets`, eller tilbake til en vanlig form (`None`).
+    SetCut {
+        spline: SplineId,
+        cut: Option<Cut>,
+    },
     /// Skjuler eller låser laget med rotsplinen `spline`. Tillatt også når
     /// laget er låst, så det kan låses opp.
     SetLayer {
@@ -768,6 +802,7 @@ impl Skeleton {
     pub fn apply(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
         let mut next = self.clone();
         let created = next.apply_inner(edit)?;
+        next.prune_cuts();
         *self = next;
         Ok(created)
     }
@@ -1162,6 +1197,7 @@ impl Skeleton {
                     s.locked = locked;
                 })?
             }
+            E::SetCut { spline, ref cut } => self.set_cut(spline, cut.clone())?,
             E::Batch { ref edits } => {
                 let mut created = None;
                 for e in edits {
@@ -1198,6 +1234,8 @@ pub struct SplineView {
     pub end_parent: Option<SplineId>,
     pub end_at: f64,
     pub parts: Vec<PartView>,
+    /// Negativ form: lagene laget skjærer i. Bare for rotspliner.
+    pub cut: Option<Cut>,
 }
 
 /// En mesh-del med foten og høyderetningen i verdenskoordinater.
@@ -1330,6 +1368,7 @@ impl Skeleton {
                     flat_end: spline.flat_end,
                     end_parent: spline.end.map(|e| e.parent),
                     end_at: spline.end.map_or(0.0, |e| e.at),
+                    cut: spline.cut.clone(),
                     parts: spline
                         .parts
                         .iter()
@@ -1502,6 +1541,7 @@ impl Skeleton {
             orientation: Orientation::FollowParent,
             end: None,
             parts: Vec::new(),
+            cut: None,
         };
         self.insert(spline)
     }
@@ -1531,6 +1571,7 @@ impl Skeleton {
             orientation: Orientation::FollowParent,
             end: None,
             parts: Vec::new(),
+            cut: None,
         };
         self.insert(spline)
     }
@@ -1970,7 +2011,8 @@ impl Skeleton {
             | E::MakeMaster { spline, .. }
             | E::LinkMaster { spline, .. }
             | E::Unlink { spline, .. }
-            | E::SetFlatEnd { spline, .. } => Some(spline),
+            | E::SetFlatEnd { spline, .. }
+            | E::SetCut { spline, .. } => Some(spline),
             E::SetMaster { master, .. } => {
                 // En master endrer alle koblede konturer, også i andre lag.
                 let linked = self.splines.iter().find(|(_, s)| {
@@ -2014,6 +2056,74 @@ impl Skeleton {
                 id: *id,
                 entry: entry.clone(),
             })
+            .collect()
+    }
+
+    /// En rotspline som ikke selv er en negativ form.
+    fn is_plain_root(&self, id: SplineId) -> bool {
+        self.splines
+            .get(&id)
+            .is_some_and(|s| s.attachment.is_none() && s.cut.is_none())
+    }
+
+    fn set_cut(&mut self, id: SplineId, cut: Option<Cut>) -> Result<(), String> {
+        let spline = self.spline(id).ok_or("Splinen finnes ikke")?;
+        if spline.attachment.is_some() {
+            return Err("Bare et helt lag kan trekkes fra".into());
+        }
+        let cut = match cut {
+            None => None,
+            Some(mut c) => {
+                if let Some((other, _)) = self
+                    .splines
+                    .iter()
+                    .find(|(_, s)| s.cut.as_ref().is_some_and(|c| c.targets.contains(&id)))
+                {
+                    return Err(format!(
+                        "Laget kuttes av lag {other} og kan ikke selv trekkes fra"
+                    ));
+                }
+                let mut seen = Vec::new();
+                for t in c.targets.drain(..) {
+                    if t == id || !self.is_plain_root(t) {
+                        return Err("En negativ form kan bare skjære i vanlige lag".into());
+                    }
+                    if !seen.contains(&t) {
+                        seen.push(t);
+                    }
+                }
+                c.targets = seen;
+                Some(c)
+            }
+        };
+        self.update(id, |s| s.cut = cut)
+    }
+
+    /// Fjerner kuttemål som ikke lenger er vanlige lag (slettet eller festet
+    /// som gren), og kutt på spliner som ikke lenger er rotspliner.
+    fn prune_cuts(&mut self) {
+        let plain: Vec<SplineId> = self
+            .splines
+            .iter()
+            .filter(|(_, s)| s.attachment.is_none() && s.cut.is_none())
+            .map(|(id, _)| *id)
+            .collect();
+        for s in self.splines.values_mut() {
+            if s.attachment.is_some() {
+                s.cut = None;
+            }
+            if let Some(c) = &mut s.cut {
+                c.targets.retain(|t| plain.contains(t));
+            }
+        }
+    }
+
+    /// De aktive negative formene som skjærer i laget `root`.
+    pub fn cutters_of(&self, root: SplineId) -> Vec<(SplineId, &Cut)> {
+        self.splines
+            .iter()
+            .filter_map(|(id, s)| s.cut.as_ref().map(|c| (*id, c)))
+            .filter(|(_, c)| c.active && c.targets.contains(&root))
             .collect()
     }
 
@@ -2085,6 +2195,7 @@ impl Skeleton {
     fn update(&mut self, id: SplineId, f: impl FnOnce(&mut Spline)) -> Result<(), String> {
         let mut next = self.clone();
         f(next.splines.get_mut(&id).ok_or("Splinen finnes ikke")?);
+        next.prune_cuts();
         next.validate()?;
         *self = next;
         Ok(())
@@ -2153,6 +2264,16 @@ impl Skeleton {
                 }
                 if !(0.0..=1.0).contains(&e.at) {
                     return Err(format!("Enden av spline {id} er koblet utenfor splinen"));
+                }
+            }
+            if let Some(c) = &s.cut {
+                if s.attachment.is_some() {
+                    return Err(format!("Spline {id} er en gren; bare lag kan trekkes fra"));
+                }
+                for t in &c.targets {
+                    if *t == *id || !self.is_plain_root(*t) {
+                        return Err(format!("Lag {id} skjærer i et ugyldig lag"));
+                    }
                 }
             }
             if *id >= self.next_id {

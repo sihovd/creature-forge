@@ -4,7 +4,8 @@ import { ContourMode } from './contour-mode';
 import { ContourRegistry } from './contour-registry';
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
-import type { Command, GeometryResult, Library, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
+import type { Command, Cut, GeometryResult, Library, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
+import { cuttableLayers, defaultCutTargets } from './cut-math';
 import { LayerPanel, splineName } from './layer-panel';
 import { PartsPanel } from './parts-panel';
 import { ProfilePanel } from './profile-panel';
@@ -37,6 +38,14 @@ const objectName = $<HTMLInputElement>('#object-name');
 const layerHidden = $<HTMLInputElement>('#layer-hidden');
 const layerLocked = $<HTMLInputElement>('#layer-locked');
 const lockedInfo = $('#locked-info');
+const cutSection = $('#cut-section');
+const cutAdd = $<HTMLButtonElement>('#cut-add');
+const cutSubtract = $<HTMLButtonElement>('#cut-subtract');
+const cutOptions = $('#cut-options');
+const cutTargets = $('#cut-targets');
+const cutActive = $<HTMLInputElement>('#cut-active');
+const cutSharp = $<HTMLInputElement>('#cut-sharp');
+const cutShow = $<HTMLInputElement>('#cut-show');
 const editSections = $<HTMLFieldSetElement>('#edit-sections');
 const branchSection = $('#branch-section');
 const editContour = $<HTMLButtonElement>('#edit-contour');
@@ -155,8 +164,13 @@ function syncLibrary(library: Library) {
 /** Skjulte og låste lag i visningen, og laglisten. */
 function syncLayers() {
   const roots = skeleton.splines.filter((s) => s.parent === null);
-  viewport.setShapeStates(new Set(roots.filter((r) => r.hidden).map((r) => r.id)), new Set(roots.filter((r) => r.locked).map((r) => r.id)));
+  viewport.setShapeStates(
+    new Set(roots.filter((r) => r.hidden).map((r) => r.id)),
+    new Set(roots.filter((r) => r.locked).map((r) => r.id)),
+    new Set(roots.filter((r) => r.cut).map((r) => r.id)),
+  );
   container.dataset.layers = String(roots.length);
+  container.dataset.cutters = String(roots.filter((r) => r.cut).length);
   container.dataset.hiddenLayers = String(roots.filter((r) => r.hidden).length);
   container.dataset.lockedLayers = String(roots.filter((r) => r.locked).length);
 }
@@ -221,7 +235,85 @@ function updateInspector() {
   objectName.dataset.spline = String(named.id);
   layerHidden.checked = layer.hidden;
   layerLocked.checked = layer.locked;
+  updateCutSection(layer, !!sel.layer);
 }
+
+/** «＋ Legg til» / «− Trekk fra» for laget, og hva en negativ form skjærer i. */
+function updateCutSection(layer: SplineView, shown: boolean) {
+  cutSection.hidden = !shown;
+  if (!shown) return;
+  const cut = layer.cut;
+  cutAdd.setAttribute('aria-pressed', String(!cut));
+  cutSubtract.setAttribute('aria-pressed', String(!!cut));
+  cutOptions.hidden = !cut;
+  cutSection.dataset.layer = String(layer.id);
+  if (!cut) return;
+  cutActive.checked = cut.active;
+  cutSharp.checked = cut.sharp;
+  cutShow.checked = !layer.hidden;
+  cutTargets.replaceChildren(
+    ...cuttableLayers(skeleton.splines, layer.id).map((t) => {
+      const label = document.createElement('label');
+      label.className = 'check';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.target = String(t.id);
+      box.checked = cut.targets.includes(t.id);
+      label.append(box, ` ${splineName(t)}`);
+      return label;
+    }),
+  );
+}
+
+function setCut(root: number, cut: Cut | null, what: string) {
+  editSkeleton({ kind: 'setCut', spline: root, cut }, what);
+}
+
+/** Bytter laget mellom vanlig og negativ form. En ny negativ form skjærer i
+ * lagene den overlapper; listen kan endres i inspektøren. */
+function toggleCut(root: number) {
+  const r = skeleton.spline(root);
+  if (!r) return;
+  if (r.cut) return setCut(root, null, `${splineName(r)} legges til`);
+  const targets = defaultCutTargets(skeleton.splines, root, skeleton.mirror);
+  const names = targets.map((t) => splineName(skeleton.spline(t)!)).join(', ');
+  setCut(root, { targets, active: true, sharp: false }, targets.length ? `${splineName(r)} trekkes fra ${names}` : `${splineName(r)} er en negativ form. Velg lagene den skal skjære i.`);
+}
+
+function cutLayer() {
+  const r = skeleton.spline(Number(cutSection.dataset.layer));
+  return r?.cut ? { r, cut: r.cut } : null;
+}
+
+cutAdd.addEventListener('click', () => {
+  const r = skeleton.spline(Number(cutSection.dataset.layer));
+  if (r?.cut) toggleCut(r.id);
+});
+cutSubtract.addEventListener('click', () => {
+  const r = skeleton.spline(Number(cutSection.dataset.layer));
+  if (r && !r.cut) toggleCut(r.id);
+});
+cutTargets.addEventListener('change', (e) => {
+  const c = cutLayer();
+  const box = e.target as HTMLInputElement;
+  if (!c || !box.dataset.target) return;
+  const t = Number(box.dataset.target);
+  const targets = box.checked ? [...c.cut.targets, t] : c.cut.targets.filter((x) => x !== t);
+  const name = splineName(skeleton.spline(t)!);
+  setCut(c.r.id, { ...c.cut, targets }, box.checked ? `${splineName(c.r)} skjærer i ${name}` : `${splineName(c.r)} skjærer ikke lenger i ${name}`);
+});
+cutActive.addEventListener('change', () => {
+  const c = cutLayer();
+  if (c) setCut(c.r.id, { ...c.cut, active: cutActive.checked }, cutActive.checked ? 'Utskjæringen er aktiv' : 'Utskjæringen er slått av');
+});
+cutSharp.addEventListener('change', () => {
+  const c = cutLayer();
+  if (c) setCut(c.r.id, { ...c.cut, sharp: cutSharp.checked }, cutSharp.checked ? 'Skarp kant mot kuttet' : 'Myk overgang mot kuttet');
+});
+cutShow.addEventListener('change', () => {
+  const c = cutLayer();
+  if (c) setLayer(c.r.id, !cutShow.checked, c.r.locked);
+});
 
 function editSkeleton(edit: SkeletonEdit, what: string) {
   run({ kind: 'commitSkeleton', edit }, (_t, ms) => `${what} · ${ms.toFixed(0)} ms`);
@@ -302,6 +394,7 @@ const layers: LayerPanel = new LayerPanel($('#layer-list'), skeleton, {
   },
   rename: (spline, name) => renameSpline(spline, name),
   setLayer: (root, hidden, locked) => setLayer(root, hidden, locked),
+  toggleCut: (root) => toggleCut(root),
 });
 
 function setSelection(selection: Selection | null) {
@@ -816,6 +909,7 @@ function openMenu(x: number, y: number) {
         null,
         { label: 'Skjul laget', action: () => setLayer(layer.id, true, layer.locked) },
         { label: 'Lås laget', action: () => setLayer(layer.id, layer.hidden, true) },
+        { label: layer.cut ? '＋ Legg til (vanlig form)' : '− Trekk fra (negativ form)', action: () => toggleCut(layer.id) },
         { label: 'Slett laget', action: () => editSkeleton({ kind: 'remove', spline: hit.shape }, 'Slettet laget') },
       ]);
     }
@@ -852,10 +946,15 @@ declare global {
       cameraPosition(): Vec3;
       /** Forelder, feste og orientering. */
       splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number; endParent: number | null; endAt: number; parts: number } | null;
+      /** Antall trekanter i kroppen og om den vises (0 når den mangler). */
+      shapeInfo(shape: number): { triangles: number; visible: boolean };
     };
   }
 }
 window.creatureForgeTest = {
+  shapeInfo(shape) {
+    return viewport.shapeInfo(shape);
+  },
   gripNearCenter() {
     // Kontrollpunktet nærmest midten som ikke ligger oppå skjelettet (det har forrang).
     const rect = viewport.renderer.domElement.getBoundingClientRect();

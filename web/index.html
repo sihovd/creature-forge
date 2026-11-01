@@ -53,6 +53,19 @@
             <label class="check"><input id="layer-locked" type="checkbox" /> Låst</label>
           </div>
           <p id="locked-info" class="help locked-info" hidden>Laget er låst. Lås det opp for å redigere.</p>
+          <div id="cut-section" class="cut-section" hidden>
+            <div class="mode" role="group" aria-label="Formens virkning">
+              <button id="cut-add" type="button" aria-pressed="true" title="Laget legges til modellen">＋ Legg til</button>
+              <button id="cut-subtract" type="button" aria-pressed="false" title="Laget trekkes fra lagene du velger under">− Trekk fra</button>
+            </div>
+            <div id="cut-options" hidden>
+              <p class="help">Kutter i (uavhengig av feste og rekkefølge):</p>
+              <div id="cut-targets" class="targets"></div>
+              <label class="check"><input id="cut-active" type="checkbox" /> Utskjæring aktiv</label>
+              <label class="check"><input id="cut-sharp" type="checkbox" /> Skarp kant</label>
+              <label class="check"><input id="cut-show" type="checkbox" /> Vis kutter</label>
+            </div>
+          </div>
         </div>
         <h2 class="section">Formgrep</h2>
         <label>

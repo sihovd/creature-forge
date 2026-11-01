@@ -9,6 +9,10 @@
 //! lagres i rammen til nærmeste spline og spilles av på nytt oppå meshen
 //! når skjelettet endres, så de følger med når formen flyttes eller bøyes.
 //! Hvert ferdig drag er én operasjon og dermed ett angresteg.
+//!
+//! Et lag kan være en negativ form (`Cut`) som trekkes fra lagene den
+//! skjærer i. Kuttet skjer i avstandsfeltet før uttrekkene spilles av;
+//! mesh-deler i målet kuttes ikke.
 
 use crate::mesh::{length, normalize, sub, TriMesh, Vec3};
 use crate::pull::{apply_pull, Pull};
@@ -503,6 +507,24 @@ fn changed_roots(old: &Skeleton, new: &Skeleton) -> Vec<SplineId> {
     out.sort_unstable();
     out.dedup();
     out.retain(|r| shared || body(old, &wold, *r) != body(new, &wnew, *r));
+    // En negativ form som endres, endrer lagene den skjærer i, før og etter.
+    let targets = |s: &Skeleton, r: SplineId| -> Vec<SplineId> {
+        s.spline(r)
+            .and_then(|sp| sp.cut.as_ref())
+            .map_or_else(Vec::new, |c| c.targets.clone())
+    };
+    let mut cut: Vec<SplineId> = out
+        .iter()
+        .flat_map(|r| {
+            let mut t = targets(old, *r);
+            t.extend(targets(new, *r));
+            t
+        })
+        .filter(|t| new.spline(*t).is_some())
+        .collect();
+    out.append(&mut cut);
+    out.sort_unstable();
+    out.dedup();
     out
 }
 
@@ -1059,5 +1081,148 @@ mod tests {
         .unwrap();
         assert!(doc.skeleton().spline(root).unwrap().profiles.is_empty());
         assert_eq!(doc.skeleton().spline(child).unwrap().profiles[0].at, 0.6);
+    }
+
+    fn cut(targets: Vec<ShapeId>) -> crate::skeleton::Cut {
+        crate::skeleton::Cut {
+            targets,
+            active: true,
+            sharp: false,
+        }
+    }
+
+    /// To kuler side om side og en kutter som overlapper den første.
+    fn two_balls_and_cutter(doc: &mut Document) -> (ShapeId, ShapeId, ShapeId) {
+        let a = doc.add_sphere([0.0, 25.0, 0.0], 15.0).unwrap();
+        let b = doc.add_sphere([60.0, 25.0, 0.0], 15.0).unwrap();
+        let c = doc.add_sphere([14.0, 25.0, 0.0], 8.0).unwrap();
+        (a, b, c)
+    }
+
+    #[test]
+    fn negativ_form_kutter_bare_maalet_og_kan_angres_og_lagres() {
+        let mut doc = Document::new(1.5);
+        let (a, b, c) = two_balls_and_cutter(&mut doc);
+        let (va, vb) = (
+            doc.mesh(a).unwrap().signed_volume(),
+            doc.mesh(b).unwrap().signed_volume(),
+        );
+        doc.commit_skeleton(&E::SetCut {
+            spline: c,
+            cut: Some(cut(vec![a])),
+        })
+        .unwrap();
+        let cut_a = doc.mesh(a).unwrap().signed_volume();
+        assert!(cut_a < va * 0.95, "{cut_a} {va}");
+        assert_eq!(doc.mesh(b).unwrap().signed_volume(), vb);
+        // Kutteren er fortsatt et eget, redigerbart lag med egen mesh.
+        assert!(doc.mesh(c).is_some());
+
+        // Flyttes kutteren, beregnes målet på nytt.
+        doc.commit_skeleton(&E::Translate {
+            spline: c,
+            delta: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+        let moved = doc.mesh(a).unwrap().signed_volume();
+        assert!(moved > cut_a, "{moved} {cut_a}");
+        assert_eq!(doc.undo(), Some(SKELETON_SHAPE));
+        assert!((doc.mesh(a).unwrap().signed_volume() - cut_a).abs() < 1e-9);
+
+        // Utskjæringen slås av uten at kutteren skjules eller endres.
+        doc.commit_skeleton(&E::SetCut {
+            spline: c,
+            cut: Some(crate::skeleton::Cut {
+                active: false,
+                ..cut(vec![a])
+            }),
+        })
+        .unwrap();
+        assert!((doc.mesh(a).unwrap().signed_volume() - va).abs() < 1e-9);
+        assert!(!doc.skeleton().spline(c).unwrap().hidden);
+        doc.undo();
+
+        // Prosjektfilen bevarer kutteren og målet.
+        let text = doc.to_project_json();
+        let opened = Document::open_project(&text, 1.5).unwrap();
+        assert_eq!(opened.skeleton().spline(c).unwrap().cut, Some(cut(vec![a])));
+        assert!((opened.mesh(a).unwrap().signed_volume() - cut_a).abs() < 1e-6);
+    }
+
+    #[test]
+    fn kuttemaal_er_eksplisitte_og_ryddes_naar_maalet_slettes() {
+        let mut doc = Document::new(2.0);
+        let (a, b, c) = two_balls_and_cutter(&mut doc);
+        doc.commit_skeleton(&E::SetCut {
+            spline: c,
+            cut: Some(cut(vec![a, b, a])),
+        })
+        .unwrap();
+        assert_eq!(doc.skeleton().spline(c).unwrap().cut, Some(cut(vec![a, b])));
+        // En kutter kan ikke skjære i seg selv, i en annen kutter eller i en gren.
+        assert!(doc
+            .commit_skeleton(&E::SetCut {
+                spline: c,
+                cut: Some(cut(vec![c])),
+            })
+            .is_err());
+        assert!(
+            doc.commit_skeleton(&E::SetCut {
+                spline: a,
+                cut: Some(cut(vec![b])),
+            })
+            .is_err(),
+            "a kuttes av c og kan ikke selv være kutter"
+        );
+        let branch = doc
+            .commit_skeleton(&E::AddChild {
+                parent: b,
+                at: 1.0,
+                direction: [1.0, 0.0, 0.0],
+                length: 20.0,
+                thickness: 4.0,
+                orientation: Orientation::FollowParent,
+            })
+            .unwrap()
+            .unwrap();
+        assert!(doc
+            .commit_skeleton(&E::SetCut {
+                spline: c,
+                cut: Some(cut(vec![branch])),
+            })
+            .is_err());
+        assert!(doc
+            .commit_skeleton(&E::SetCut {
+                spline: branch,
+                cut: Some(cut(vec![a])),
+            })
+            .is_err());
+        // Festet til grenen på b er urørt av kuttet.
+        assert_eq!(
+            doc.skeleton()
+                .spline(branch)
+                .unwrap()
+                .attachment
+                .unwrap()
+                .parent,
+            b
+        );
+        // Slettes et mål, fjernes det fra kutteren; resten står.
+        doc.commit_skeleton(&E::Remove { spline: b }).unwrap();
+        assert_eq!(doc.skeleton().spline(c).unwrap().cut, Some(cut(vec![a])));
+        doc.undo();
+        assert_eq!(doc.skeleton().spline(c).unwrap().cut, Some(cut(vec![a, b])));
+        // Tilbake til vanlig form: målet blir helt igjen.
+        let whole = {
+            let mut d = Document::new(2.0);
+            let (a2, _, _) = two_balls_and_cutter(&mut d);
+            d.mesh(a2).unwrap().signed_volume()
+        };
+        doc.commit_skeleton(&E::SetCut {
+            spline: c,
+            cut: None,
+        })
+        .unwrap();
+        assert!((doc.mesh(a).unwrap().signed_volume() - whole).abs() < 1e-9);
     }
 }

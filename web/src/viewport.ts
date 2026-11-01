@@ -22,9 +22,19 @@ export class Viewport {
   private material = new THREE.MeshStandardMaterial({ color: 0xd9c7a8, roughness: 0.65 });
   /** Låste lag tegnes litt nedtonet. */
   private lockedMaterial = new THREE.MeshStandardMaterial({ color: 0xc9c4bb, roughness: 0.8, transparent: true, opacity: 0.75 });
-  /** Skjulte og låste lag (kroppen har samme id som rotsplinen). */
+  /** Negative former tegnes gjennomsiktig, så målet de skjærer i synes. */
+  private cutterMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8a5cd6,
+    roughness: 0.5,
+    transparent: true,
+    opacity: 0.28,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  /** Skjulte og låste lag og negative former (kroppen har samme id som rotsplinen). */
   private hiddenShapes = new Set<number>();
   private lockedShapes = new Set<number>();
+  private cutterShapes = new Set<number>();
   private points = new Map<number, ControlPoint[]>();
   private pointMarkers = new THREE.Group();
   private pointGeometry = new THREE.SphereGeometry(0.55, 10, 8);
@@ -103,12 +113,18 @@ export class Viewport {
     geometry.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
     geometry.setIndex(new THREE.BufferAttribute(result.indices, 1));
     geometry.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geometry, this.lockedShapes.has(shape) ? this.lockedMaterial : this.material);
+    const mesh = new THREE.Mesh(geometry, this.materialFor(shape));
     mesh.visible = !this.hiddenShapes.has(shape);
     mesh.userData.shape = shape;
     this.shapes.set(shape, mesh);
     this.scene.add(mesh);
     return result.indices.length / 3;
+  }
+
+  /** Antall trekanter i kroppen og om den vises (for testene). */
+  shapeInfo(shape: number) {
+    const m = this.shapes.get(shape);
+    return { triangles: m ? (m.geometry.index?.count ?? 0) / 3 : 0, visible: !!m?.visible };
   }
 
   setControlPoints(shape: number, data: Float32Array) {
@@ -129,18 +145,31 @@ export class Viewport {
    * Skjulte lag vises ikke og kan ikke treffes. Låste lag vises, men treffes
    * ikke av pekeren og har ingen kontrollpunkter, så klikk går gjennom dem.
    */
-  setShapeStates(hidden: Set<number>, locked: Set<number>) {
+  setShapeStates(hidden: Set<number>, locked: Set<number>, cutters: Set<number> = this.cutterShapes) {
     this.hiddenShapes = hidden;
     this.lockedShapes = locked;
+    this.cutterShapes = cutters;
     for (const [id, mesh] of this.shapes) {
       mesh.visible = !hidden.has(id);
-      mesh.material = locked.has(id) ? this.lockedMaterial : this.material;
+      mesh.material = this.materialFor(id);
+      mesh.renderOrder = cutters.has(id) ? 1 : 0;
     }
     this.rebuildPointMarkers();
   }
 
+  private materialFor(shape: number) {
+    if (this.cutterShapes.has(shape)) return this.cutterMaterial;
+    return this.lockedShapes.has(shape) ? this.lockedMaterial : this.material;
+  }
+
   private active(shape: number) {
     return !this.hiddenShapes.has(shape) && !this.lockedShapes.has(shape);
+  }
+
+  /** Formen har kontrollpunkter. En negativ form formes med skjelettet,
+   * ikke med prikkene, siden kuttet følger splinene. */
+  private hasPoints(shape: number) {
+    return this.active(shape) && !this.cutterShapes.has(shape);
   }
 
   /** Formene pekeren kan treffe. */
@@ -166,7 +195,7 @@ export class Viewport {
 
   private rebuildPointMarkers() {
     this.pointMarkers.clear();
-    const all = [...this.points].filter(([id]) => this.active(id)).flatMap(([, pts]) => pts);
+    const all = [...this.points].filter(([id]) => this.hasPoints(id)).flatMap(([, pts]) => pts);
     if (!all.length) return;
     const inst = new THREE.InstancedMesh(this.pointGeometry, this.pointMaterial, all.length);
     const m = new THREE.Matrix4();
@@ -213,7 +242,7 @@ export class Viewport {
     let best: ControlPoint | null = null;
     let bestDist = maxPx;
     for (const [shape, pts] of this.points) {
-      if (!this.active(shape)) continue;
+      if (!this.hasPoints(shape)) continue;
       for (const p of pts) {
         toCamera.subVectors(this.camera.position, p.position);
         if (toCamera.dot(p.normal) <= 0) continue;
@@ -231,7 +260,7 @@ export class Viewport {
     const dir = p.clone().sub(this.camera.position);
     const dist = dir.length();
     this.raycaster.set(this.camera.position, dir.normalize());
-    const visible = [...this.shapes.values()].filter((m) => m.visible);
+    const visible = [...this.shapes.values()].filter((m) => m.visible && !this.cutterShapes.has(m.userData.shape as number));
     const hit = this.raycaster.intersectObjects(visible, false)[0];
     return !!hit && hit.distance < dist - 0.5;
   }
