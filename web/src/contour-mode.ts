@@ -14,7 +14,7 @@ export interface ContourModeCallbacks {
   changed: (active: boolean) => void;
 }
 
-/** Hvor stor del av bildehøyden konturen fyller når modusen starter. */
+/** Hvor stor del av bildets minste mål konturen fyller når modusen starter. */
 const FILL = 0.5;
 const v3 = (p: [number, number, number]) => new THREE.Vector3(p[0], p[1], p[2]);
 
@@ -149,7 +149,9 @@ export class ContourMode {
     // Omrisset er i enheter av tykkelsen; største utstrekning i mm.
     const k = st.scale * s.thickness;
     const extent = Math.max(...st.profile.points.map((p) => Math.hypot(p.position[0], p.position[1]))) * k;
-    const distance = this.viewport.distanceForHeight((2 * Math.max(extent, 1)) / FILL);
+    // Konturen skal passe både i høyden og i bredden (smalt lerret på nettbrett på høykant).
+    const aspect = Math.min(1, this.viewport.camera.aspect || 1);
+    const distance = this.viewport.distanceForHeight((2 * Math.max(extent, 1)) / FILL / aspect);
     this.viewport.setCamera({ position: origin.clone().addScaledVector(normal, distance), target: origin, up: v3(st.y_axis).normalize() });
     this.viewport.controls.enableRotate = false;
     this.viewport.interactionLocked = true;
