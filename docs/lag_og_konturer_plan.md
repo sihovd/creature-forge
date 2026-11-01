@@ -99,3 +99,7 @@ Et sammenhengende startsett på omtrent 30 ikoner, blant annet spline, gren, kon
 ### Utsatt
 
 Mirror (til laginndelingen fungerer), frihåndstegning av barnesplines med penn eller finger, og valg av tegneplan for nye spliner.
+
+## Plattform (Sivert 2026-10-30)
+
+Appen skal ikke fungere på telefon, fordi skjermen er for liten. Desktop er hovedmålet, og iPad Pro er det minste støttede nettbrettet. Vinduer under 700 × 480 px viser meldingen «Skjermen er for liten» i stedet for editoren. Mobiloppsettet for telefon (laglisteskuff, kompakt toppfelt) er fjernet. Playwright tester berøring på iPad Pro 11 (834 × 1194) og bare sperremeldingen på telefon. Konturredigeringen tilpasser zoomen til både bredde og høyde, slik at konturen får plass på et smalt lerret når nettbrettet står på høykant.

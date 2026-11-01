@@ -57,7 +57,6 @@ const geometry = new GeometryClient();
 const skeleton = new SkeletonView(viewport);
 const gizmo = new AxisGizmo(viewport, container);
 let activeTool: 'select' | 'bezier' = 'select';
-const narrow = window.matchMedia('(max-width: 640px)');
 const fmt = (n: number) => n.toLocaleString('nb-NO');
 
 function readMm(input: HTMLInputElement, fallback: number) {
@@ -271,8 +270,6 @@ const profiles: ProfilePanel = new ProfilePanel(skeleton, {
 const layers: LayerPanel = new LayerPanel($('#layer-list'), skeleton, {
   select: (selection) => {
     setSelection(selection);
-    // På små skjermer ligger listen over arbeidsflaten og lukkes etter valget.
-    if (narrow.matches && toggleLayers.getAttribute('aria-expanded') === 'true') toggleLayers.click();
   },
   rename: (spline, name) => renameSpline(spline, name),
   setLayer: (root, hidden, locked) => setLayer(root, hidden, locked),
@@ -348,8 +345,6 @@ toggleLayers.addEventListener('click', () => {
   toggleLayers.setAttribute('aria-expanded', String(open));
   document.body.classList.toggle('layers-closed', !open);
 });
-// Laglisten er lukket på små skjermer til brukeren åpner den.
-if (narrow.matches) toggleLayers.click();
 
 /**
  * Ny gren fra andelen `at` av `parent`. Et retningshåndtak vises først,
