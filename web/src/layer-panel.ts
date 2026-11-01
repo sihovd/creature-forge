@@ -5,6 +5,8 @@ export interface LayerPanelCallbacks {
   select: (selection: Selection) => void;
   rename: (spline: number, name: string) => void;
   setLayer: (root: number, hidden: boolean, locked: boolean) => void;
+  /** Bytter laget mellom «＋ Legg til» og «− Trekk fra». */
+  toggleCut: (root: number) => void;
 }
 
 /** Navnet som vises for en spline: brukerens navn, ellers et laget navn. */
@@ -70,6 +72,7 @@ export class LayerPanel {
     }
     if (action === 'hide') return this.cb.setLayer(spline, !s.hidden, s.locked);
     if (action === 'lock') return this.cb.setLayer(spline, s.hidden, !s.locked);
+    if (action === 'cut') return this.cb.toggleCut(spline);
     if (row.dataset.kind !== 'contour' && this.isDoubleClick(key, e.timeStamp)) {
       // Dobbeltklikk gir nytt navn. Hovedsplinen har lagets navn, så navnet endres på laget.
       return this.startRename(s.parent === null ? `l${s.id}` : key);
@@ -126,11 +129,28 @@ export class LayerPanel {
         selected: !!sel?.layer && sel.spline === r.id,
         expandable: true,
         open,
-        icon: 'layer',
+        icon: r.cut ? 'cutter' : 'layer',
         dim: r.hidden,
       });
+      if (r.cut) li.querySelector('.row')!.classList.add('cutter');
       const tools = document.createElement('span');
       tools.className = 'row-tools';
+      // «＋/−» vises på negative former og på laget som er valgt, så smale
+      // lister (nettbrett) har plass til å trykke på selve raden.
+      if (r.cut || (sel?.layer && sel.spline === r.id)) {
+        // Minusmerket på en negativ form; tittelen sier hvor mange lag den skjærer i.
+        const label = !r.cut
+          ? 'Legg til (bytt til Trekk fra)'
+          : r.cut.active
+            ? `Trekk fra: skjærer i ${r.cut.targets.length} lag (bytt til Legg til)`
+            : 'Trekk fra: utskjæringen er slått av (bytt til Legg til)';
+        const b = this.textButton('cut', label, r.cut ? '−' : '＋', !!r.cut);
+        if (r.cut) {
+          b.dataset.targets = String(r.cut.targets.length);
+          if (!r.cut.active) b.classList.add('off');
+        }
+        tools.append(b);
+      }
       tools.append(
         this.toolButton('hide', r.hidden ? 'Vis laget' : 'Skjul laget', r.hidden ? SVG_EYE_OFF : SVG_EYE, r.hidden),
         this.toolButton('lock', r.locked ? 'Lås opp laget' : 'Lås laget', r.locked ? SVG_LOCK : SVG_UNLOCK, r.locked),
@@ -203,6 +223,13 @@ export class LayerPanel {
       );
     });
     for (const c of children) this.appendSpline(list, c, depth + 1);
+  }
+
+  private textButton(action: string, label: string, text: string, on: boolean) {
+    const b = this.toolButton(action, label, '', on);
+    b.classList.add('row-mode');
+    b.textContent = text;
+    return b;
   }
 
   private toolButton(action: string, label: string, svg: string, on: boolean) {

@@ -22,17 +22,22 @@
         <button id="save-project" type="button" class="secondary" title="Lagre prosjekt (Ctrl+S)" disabled>Lagre</button>
         <input id="project-file" type="file" accept=".cfproj,application/json" hidden />
       </div>
-      <div class="tools modes-bar" role="toolbar" aria-label="Verktøy">
-        <button id="tool-select" type="button" class="tool" aria-pressed="true" title="Velg og dra punkter, håndtak og kurver">Velg</button>
-        <button id="tool-bezier" type="button" class="tool" aria-pressed="false" title="Trykk på en kurve for å sette inn et ankerpunkt">Bézier</button>
-        <button id="add-spline" type="button" title="Ny spline: velg uttrekksretning i aksekorset">Ny spline</button>
-      </div>
       <div class="tools" role="toolbar" aria-label="Historikk">
         <button id="undo" type="button" class="secondary" title="Angre (Ctrl+Z)" disabled>Angre</button>
         <button id="redo" type="button" class="secondary" title="Gjør om (Ctrl+Shift+Z)" disabled>Gjør om</button>
       </div>
     </header>
     <div class="workspace">
+      <nav id="toolbar" class="toolbar" role="toolbar" aria-label="Verktøy" aria-orientation="vertical">
+        <button id="tool-select" type="button" class="tool" aria-pressed="true" title="Velg og dra punkter, håndtak og kurver"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3l12 8-5.5 1.2L15 19l-2.6 1.2-2.6-6.5L6 17z"/></svg><span>Velg</span></button>
+        <button id="tool-bezier" type="button" class="tool" aria-pressed="false" title="Trykk på en kurve for å sette inn et ankerpunkt"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18C7 6 17 18 20 6" fill="none"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="6" r="2"/></svg><span>Bézier</span></button>
+        <button id="add-spline" type="button" class="tool" title="Ny spline: velg uttrekksretning i aksekorset"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20C8 12 14 14 19 5" fill="none"/><circle cx="19" cy="5" r="2.4"/></svg><span>Ny spline</span></button>
+        <button id="tool-branch" type="button" class="tool" aria-label="Grenverktøy" title="Ny gren festet til valgt spline" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 21V3M7 13c5 0 9-3 11-8" fill="none"/><circle cx="18" cy="5" r="2.2"/></svg><span>Ny gren</span></button>
+        <button id="tool-contour" type="button" class="tool" aria-label="Konturverktøy" title="Ny kontur (tverrsnitt) på valgt spline" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20" fill="none"/><ellipse cx="12" cy="12" rx="8" ry="4" fill="none"/></svg><span>Ny kontur</span></button>
+        <button id="tool-part" type="button" class="tool" title="Sett inn valgt mesh-del fra delregisteret på valgt spline" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20c3-1 6-6 6-16 2 6 6 12 8 16z"/></svg><span>Mesh-del</span></button>
+        <button id="tool-mirror" type="button" class="tool" aria-pressed="false" title="Speilmodus: alt speiles om planet x = 0"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20" stroke-dasharray="2 2" fill="none"/><path d="M9 6L3 18h6zM15 6l6 12h-6z"/></svg><span>Speil</span></button>
+        <button id="open-settings" type="button" class="tool" title="Innstillinger (mesh)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" fill="none"/></svg><span>Innstillinger</span></button>
+      </nav>
       <aside id="layers" class="layers" aria-label="Lag">
         <h2>Lag</h2>
         <div id="layer-list"></div>
@@ -55,6 +60,19 @@
             <label class="check"><input id="layer-locked" type="checkbox" /> Låst</label>
           </div>
           <p id="locked-info" class="help locked-info" hidden>Laget er låst. Lås det opp for å redigere.</p>
+          <div id="cut-section" class="cut-section" hidden>
+            <div class="mode" role="group" aria-label="Formens virkning">
+              <button id="cut-add" type="button" aria-pressed="true" title="Laget legges til modellen">＋ Legg til</button>
+              <button id="cut-subtract" type="button" aria-pressed="false" title="Laget trekkes fra lagene du velger under">− Trekk fra</button>
+            </div>
+            <div id="cut-options" hidden>
+              <p class="help">Kutter i (uavhengig av feste og rekkefølge):</p>
+              <div id="cut-targets" class="targets"></div>
+              <label class="check"><input id="cut-active" type="checkbox" /> Utskjæring aktiv</label>
+              <label class="check"><input id="cut-sharp" type="checkbox" /> Skarp kant</label>
+              <label class="check"><input id="cut-show" type="checkbox" /> Vis kutter</label>
+            </div>
+          </div>
         </div>
         <h2 class="section">Formgrep</h2>
         <label>
@@ -129,6 +147,17 @@
           </select>
         </div>
         <label class="check"><input id="edit-master" type="checkbox" disabled /> Rediger master (endrer alle koblede)</label>
+        <h2 class="section">Mesh-deler</h2>
+        <div class="row">
+          <select id="part-source" aria-label="Del fra delregisteret"></select>
+          <button id="add-part" type="button" title="Sett inn delen på valgt punkt (ut fra overflaten) eller på tuppen" disabled>Sett inn</button>
+        </div>
+        <div id="part-list" class="part-list" role="list" aria-label="Delene på splinen"></div>
+        <div class="row">
+          <button id="import-part" type="button" title="Importer en ferdig 3D-mesh (OBJ eller STL) til delregisteret">Importer OBJ/STL …</button>
+          <button id="remove-part-mesh" type="button" title="Fjern den importerte delen fra registeret" disabled>Fjern fra registeret</button>
+          <input id="part-file" type="file" accept=".obj,.stl" hidden />
+        </div>
         <h2 class="section">Konturregister</h2>
         <div id="registry" class="registry" role="list" aria-label="Konturregister"></div>
         <p id="registry-help" class="help registry-help">Velg en spline eller kontur for å bruke registeret.</p>
@@ -141,10 +170,33 @@
         </div>
         </fieldset>
         <p class="help">Konturen er tverrsnittet rundt splinen, tegnet med U mot høyre og V opp. Dra punkter og håndtak, dobbeltklikk på omrisset for et nytt punkt. Mellom to konturer går formen jevnt over. Høyreklikk i arbeidsflaten for hurtigvalg.</p>
-        <p class="help">Alle former har en spline i midten med mesh rundt. «Ny spline» viser et aksekors der du velger uttrekksretningen. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Med Bézier-verktøyet setter et trykk på kurven inn et nytt punkt uten å endre formen (dobbeltklikk gjør det samme med Velg). Grenenes feste dras langs forelderen. Grip kurven til en rotspline for å flytte hele formen. Et punkt som dras nær en annen spline, snapper til den (Shift slår av). Langt trykk eller høyreklikk gir hurtigvalg.</p>
+        <p class="help">Alle former har en spline i midten med mesh rundt. «Ny spline» viser et aksekors der du velger uttrekksretningen. Dra punkter og håndtak for å forme splinen. Dra tuppen for å trekke ut, hold Alt for å panorere, og Alt + Shift for å bøye med låst lengde. Under bøying stiller scroll radien og Ctrl snapper vinkelen. Bøyen starter fra valgt punkt. Med Bézier-verktøyet setter et trykk på kurven inn et nytt punkt uten å endre formen (dobbeltklikk gjør det samme med Velg). Grenenes feste dras langs forelderen. Grip kurven til en rotspline for å flytte hele formen. Punkter flyttes fritt; hold Alt for å flytte i xyz-planet som vender mest mot kameraet. Et punkt som dras nær en annen spline, snapper til den (Shift slår av), og tuppen kobles da fast til den, så spliner kan danne et nett. En kontur kan dras over på en annen spline. Langt trykk eller høyreklikk gir hurtigvalg.</p>
         <p class="help">Hold over en prikk for å se retningen, og dra for å trekke ut eller presse inn meshen. Prikkene lager ingen spliner. Esc avbryter.</p>
       </aside>
     </div>
+    <dialog id="settings" class="settings" aria-labelledby="settings-title">
+      <form method="dialog">
+        <h2 id="settings-title">Innstillinger</h2>
+        <fieldset>
+          <legend>Mesh</legend>
+          <label>
+            Flere trekanter i knekker
+            <select id="crease-detail">
+              <option value="0">Av</option>
+              <option value="1">Lav</option>
+              <option value="2">Middels</option>
+              <option value="3">Høy</option>
+            </select>
+          </label>
+          <label>
+            Knekk fra vinkel
+            <span class="field"><input id="crease-angle" type="number" min="1" max="90" step="1" value="25" /> °</span>
+          </label>
+          <p class="help">Jo skarpere knekk på meshen, jo flere trekanter legges inn akkurat der, så kanter blir skarpere. Høyere nivå gir finere kanter, men tar lengre tid å beregne.</p>
+        </fieldset>
+        <div class="row end"><button id="close-settings" value="close">Lukk</button></div>
+      </form>
+    </dialog>
     <footer id="status" class="status" aria-live="polite">Starter geometrikjernen …</footer>
     <script type="module" src="./src/main.ts"></script>
   </body>

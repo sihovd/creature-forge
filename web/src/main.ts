@@ -4,8 +4,10 @@ import { ContourMode } from './contour-mode';
 import { ContourRegistry } from './contour-registry';
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
-import type { Command, GeometryResult, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
+import type { Command, Cut, GeometryResult, Library, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
+import { cuttableLayers, defaultCutTargets } from './cut-math';
 import { LayerPanel, splineName } from './layer-panel';
+import { PartsPanel } from './parts-panel';
 import { ProfilePanel } from './profile-panel';
 import { PullTool } from './pull-tool';
 import { polylineFraction } from './skeleton-math';
@@ -36,6 +38,14 @@ const objectName = $<HTMLInputElement>('#object-name');
 const layerHidden = $<HTMLInputElement>('#layer-hidden');
 const layerLocked = $<HTMLInputElement>('#layer-locked');
 const lockedInfo = $('#locked-info');
+const cutSection = $('#cut-section');
+const cutAdd = $<HTMLButtonElement>('#cut-add');
+const cutSubtract = $<HTMLButtonElement>('#cut-subtract');
+const cutOptions = $('#cut-options');
+const cutTargets = $('#cut-targets');
+const cutActive = $<HTMLInputElement>('#cut-active');
+const cutSharp = $<HTMLInputElement>('#cut-sharp');
+const cutShow = $<HTMLInputElement>('#cut-show');
 const editSections = $<HTMLFieldSetElement>('#edit-sections');
 const branchSection = $('#branch-section');
 const editContour = $<HTMLButtonElement>('#edit-contour');
@@ -50,6 +60,13 @@ const addBranch = $<HTMLButtonElement>('#add-branch');
 const anchorKind = $<HTMLButtonElement>('#anchor-kind');
 const removeSpline = $<HTMLButtonElement>('#remove-spline');
 const thicknessInput = $<HTMLInputElement>('#thickness');
+const toolBranch = $<HTMLButtonElement>('#tool-branch');
+const toolContour = $<HTMLButtonElement>('#tool-contour');
+const toolPart = $<HTMLButtonElement>('#tool-part');
+const toolMirror = $<HTMLButtonElement>('#tool-mirror');
+const settingsDialog = $<HTMLDialogElement>('#settings');
+const creaseDetail = $<HTMLSelectElement>('#crease-detail');
+const creaseAngle = $<HTMLInputElement>('#crease-angle');
 
 // Arbeidsrommet starter alltid tomt; brukeren legger selv til første form.
 const viewport = new Viewport(container);
@@ -75,13 +92,18 @@ function apply(result: GeometryResult) {
     for (const s of result.shapes) viewport.setShapeMesh(s.shape, s.mesh);
     return;
   }
+  skeleton.mirror = result.library.mirror;
   skeleton.set(result.skeleton);
   if (registry) registry.entries = result.registry;
+  if (parts) parts.library = result.library;
+  syncLibrary(result.library);
   if (result.created !== null) skeleton.select({ spline: result.created, index: null });
   syncLayers();
   updateSkeletonPanel();
   container.dataset.profiles = String(skeleton.splines.reduce((n, s) => n + s.profiles.length, 0));
   container.dataset.splines = String(skeleton.count);
+  container.dataset.parts = String(skeleton.splines.reduce((n, s) => n + s.parts.length, 0));
+  container.dataset.ends = String(skeleton.splines.filter((s) => s.end_parent !== null).length);
   let triangles = 0;
   for (const s of result.shapes) {
     triangles += viewport.setShapeMesh(s.shape, s.mesh);
@@ -129,11 +151,25 @@ async function pumpPreview() {
 }
 
 
+/** Speilknappen og meshinnstillingene slik dokumentet har dem. */
+function syncLibrary(library: Library) {
+  toolMirror.setAttribute('aria-pressed', String(library.mirror));
+  container.dataset.mirror = library.mirror ? 'on' : '';
+  creaseDetail.value = String(library.settings.crease_detail);
+  if (document.activeElement !== creaseAngle) creaseAngle.value = String(library.settings.crease_angle);
+  container.dataset.creaseDetail = String(library.settings.crease_detail);
+}
+
 /** Skjulte og låste lag i visningen, og laglisten. */
 function syncLayers() {
   const roots = skeleton.splines.filter((s) => s.parent === null);
-  viewport.setShapeStates(new Set(roots.filter((r) => r.hidden).map((r) => r.id)), new Set(roots.filter((r) => r.locked).map((r) => r.id)));
+  viewport.setShapeStates(
+    new Set(roots.filter((r) => r.hidden).map((r) => r.id)),
+    new Set(roots.filter((r) => r.locked).map((r) => r.id)),
+    new Set(roots.filter((r) => r.cut).map((r) => r.id)),
+  );
   container.dataset.layers = String(roots.length);
+  container.dataset.cutters = String(roots.filter((r) => r.cut).length);
   container.dataset.hiddenLayers = String(roots.filter((r) => r.hidden).length);
   container.dataset.lockedLayers = String(roots.filter((r) => r.locked).length);
 }
@@ -154,6 +190,10 @@ function updateSkeletonPanel() {
   profiles?.update();
   contourMode?.update();
   registry?.update();
+  parts?.update();
+  toolBranch.disabled = addBranch.disabled;
+  toolContour.disabled = !spline || !!sel?.layer || !!spline.locked;
+  toolPart.disabled = $<HTMLButtonElement>('#add-part').disabled || !!spline?.locked;
   editContour.disabled = !(sel?.station != null && spline && !spline.locked);
   updateInspector();
   layers?.render();
@@ -194,7 +234,85 @@ function updateInspector() {
   objectName.dataset.spline = String(named.id);
   layerHidden.checked = layer.hidden;
   layerLocked.checked = layer.locked;
+  updateCutSection(layer, !!sel.layer);
 }
+
+/** «＋ Legg til» / «− Trekk fra» for laget, og hva en negativ form skjærer i. */
+function updateCutSection(layer: SplineView, shown: boolean) {
+  cutSection.hidden = !shown;
+  if (!shown) return;
+  const cut = layer.cut;
+  cutAdd.setAttribute('aria-pressed', String(!cut));
+  cutSubtract.setAttribute('aria-pressed', String(!!cut));
+  cutOptions.hidden = !cut;
+  cutSection.dataset.layer = String(layer.id);
+  if (!cut) return;
+  cutActive.checked = cut.active;
+  cutSharp.checked = cut.sharp;
+  cutShow.checked = !layer.hidden;
+  cutTargets.replaceChildren(
+    ...cuttableLayers(skeleton.splines, layer.id).map((t) => {
+      const label = document.createElement('label');
+      label.className = 'check';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.target = String(t.id);
+      box.checked = cut.targets.includes(t.id);
+      label.append(box, ` ${splineName(t)}`);
+      return label;
+    }),
+  );
+}
+
+function setCut(root: number, cut: Cut | null, what: string) {
+  editSkeleton({ kind: 'setCut', spline: root, cut }, what);
+}
+
+/** Bytter laget mellom vanlig og negativ form. En ny negativ form skjærer i
+ * lagene den overlapper; listen kan endres i inspektøren. */
+function toggleCut(root: number) {
+  const r = skeleton.spline(root);
+  if (!r) return;
+  if (r.cut) return setCut(root, null, `${splineName(r)} legges til`);
+  const targets = defaultCutTargets(skeleton.splines, root, skeleton.mirror);
+  const names = targets.map((t) => splineName(skeleton.spline(t)!)).join(', ');
+  setCut(root, { targets, active: true, sharp: false }, targets.length ? `${splineName(r)} trekkes fra ${names}` : `${splineName(r)} er en negativ form. Velg lagene den skal skjære i.`);
+}
+
+function cutLayer() {
+  const r = skeleton.spline(Number(cutSection.dataset.layer));
+  return r?.cut ? { r, cut: r.cut } : null;
+}
+
+cutAdd.addEventListener('click', () => {
+  const r = skeleton.spline(Number(cutSection.dataset.layer));
+  if (r?.cut) toggleCut(r.id);
+});
+cutSubtract.addEventListener('click', () => {
+  const r = skeleton.spline(Number(cutSection.dataset.layer));
+  if (r && !r.cut) toggleCut(r.id);
+});
+cutTargets.addEventListener('change', (e) => {
+  const c = cutLayer();
+  const box = e.target as HTMLInputElement;
+  if (!c || !box.dataset.target) return;
+  const t = Number(box.dataset.target);
+  const targets = box.checked ? [...c.cut.targets, t] : c.cut.targets.filter((x) => x !== t);
+  const name = splineName(skeleton.spline(t)!);
+  setCut(c.r.id, { ...c.cut, targets }, box.checked ? `${splineName(c.r)} skjærer i ${name}` : `${splineName(c.r)} skjærer ikke lenger i ${name}`);
+});
+cutActive.addEventListener('change', () => {
+  const c = cutLayer();
+  if (c) setCut(c.r.id, { ...c.cut, active: cutActive.checked }, cutActive.checked ? 'Utskjæringen er aktiv' : 'Utskjæringen er slått av');
+});
+cutSharp.addEventListener('change', () => {
+  const c = cutLayer();
+  if (c) setCut(c.r.id, { ...c.cut, sharp: cutSharp.checked }, cutSharp.checked ? 'Skarp kant mot kuttet' : 'Myk overgang mot kuttet');
+});
+cutShow.addEventListener('change', () => {
+  const c = cutLayer();
+  if (c) setLayer(c.r.id, !cutShow.checked, c.r.locked);
+});
 
 function editSkeleton(edit: SkeletonEdit, what: string) {
   run({ kind: 'commitSkeleton', edit }, (_t, ms) => `${what} · ${ms.toFixed(0)} ms`);
@@ -273,6 +391,7 @@ const layers: LayerPanel = new LayerPanel($('#layer-list'), skeleton, {
   },
   rename: (spline, name) => renameSpline(spline, name),
   setLayer: (root, hidden, locked) => setLayer(root, hidden, locked),
+  toggleCut: (root) => toggleCut(root),
 });
 
 function setSelection(selection: Selection | null) {
@@ -323,6 +442,32 @@ const registry: ContourRegistry = new ContourRegistry(skeleton, profiles, {
   commit: (edit, what) => editSkeleton(edit, what),
   status: (text) => (status.textContent = text),
 });
+
+const parts: PartsPanel = new PartsPanel(skeleton, {
+  commit: (edit, what) => editSkeleton(edit, what),
+  status: (text) => (status.textContent = text),
+});
+
+// Verktøylinjen: snarveier til knappene i inspektøren, speilmodus og innstillinger.
+toolBranch.addEventListener('click', () => addBranch.click());
+toolContour.addEventListener('click', () => $<HTMLButtonElement>('#add-profile').click());
+toolPart.addEventListener('click', () => $<HTMLButtonElement>('#add-part').click());
+toolMirror.addEventListener('click', () => {
+  const on = toolMirror.getAttribute('aria-pressed') !== 'true';
+  editSkeleton({ kind: 'setMirror', mirror: on }, on ? 'Speilmodus på (om x = 0)' : 'Speilmodus av');
+});
+$<HTMLButtonElement>('#open-settings').addEventListener('click', () => settingsDialog.showModal());
+function commitMeshSettings() {
+  const angle = Math.min(Math.max(Number(creaseAngle.value.replace(',', '.')) || 25, 1), 90);
+  creaseAngle.value = String(angle);
+  const level = Number(creaseDetail.value);
+  editSkeleton(
+    { kind: 'setMeshSettings', settings: { crease_detail: level, crease_angle: angle } },
+    `Flere trekanter i knekker: ${creaseDetail.selectedOptions[0].textContent} (fra ${angle}°)`,
+  );
+}
+creaseDetail.addEventListener('change', commitMeshSettings);
+creaseAngle.addEventListener('change', commitMeshSettings);
 
 addSpline.addEventListener('click', () => {
   const rect = container.getBoundingClientRect();
@@ -662,6 +807,7 @@ function splineItems(s: SplineView, at: number): MenuItem[] {
     { label: 'Ny gren her', action: () => addBranchAt(s, at) },
     { label: 'Ny kontur her', action: () => profiles.addAt(s, at) },
     { label: 'Lim inn kontur her', action: () => profiles.pasteAt(s, at), disabled: !profiles.clip },
+    { label: `Sett inn mesh-del her (${partName()})`, action: () => parts.insert(s, at, at < 0.999), disabled: !parts.current() },
     ...(near >= 0
       ? [
           { label: `Rediger kontur ${near + 1}`, action: () => editContourAt(s.id, near) },
@@ -678,6 +824,12 @@ function splineItems(s: SplineView, at: number): MenuItem[] {
   ];
 }
 
+/** Navnet på delen som er valgt i delregisteret. */
+const partName = () => {
+  const src = parts.current();
+  return parts.library.parts.find((p) => JSON.stringify(p.source) === JSON.stringify(src))?.name ?? 'ingen valgt';
+};
+
 const historyItems = (): MenuItem[] => [
   { label: 'Angre', action: undo, disabled: undoButton.disabled, hint: 'Ctrl+Z' },
   { label: 'Gjør om', action: redo, disabled: redoButton.disabled, hint: 'Ctrl+Shift+Z' },
@@ -693,6 +845,9 @@ function openMenu(x: number, y: number) {
     select(s.id, pick.index);
     return menu.show(x, y, `${tip ? 'Tuppen' : `Punkt ${pick.index + 1}`} på spline ${s.id}`, [
       { label: a.kind === 'corner' ? 'Gjør til mykt punkt' : 'Gjør til hjørnepunkt', action: () => anchorKind.click() },
+      ...(tip && s.end_parent !== null
+        ? [{ label: 'Løsne enden', action: () => editSkeleton({ kind: 'detachEnd', spline: s.id }, 'Løsnet enden') }]
+        : []),
       ...(tip
         ? []
         : [{ label: 'Bøy herfra', action: () => (status.textContent = 'Grip tuppen og hold Alt + Shift for å bøye fra dette punktet.') }]),
@@ -742,12 +897,14 @@ function openMenu(x: number, y: number) {
         { label: 'Ny gren ut herfra', action: () => addBranchAt(s, near.at, out) },
         { label: 'Ny kontur her', action: () => profiles.addAt(s, near.at) },
         { label: 'Lim inn kontur her', action: () => profiles.pasteAt(s, near.at), disabled: !profiles.clip },
+        { label: `Sett inn mesh-del her (${partName()})`, action: () => parts.insert(s, near.at, true, arr(out)), disabled: !parts.current() },
         { label: s.flat_end ? 'Avrundet ende' : 'Flat ende', action: () => editSkeleton({ kind: 'setFlatEnd', spline: s.id, flat: !s.flat_end }, s.flat_end ? 'Avrundet ende' : 'Flat ende') },
         null,
         ...historyItems(),
         null,
         { label: 'Skjul laget', action: () => setLayer(layer.id, true, layer.locked) },
         { label: 'Lås laget', action: () => setLayer(layer.id, layer.hidden, true) },
+        { label: layer.cut ? '＋ Legg til (vanlig form)' : '− Trekk fra (negativ form)', action: () => toggleCut(layer.id) },
         { label: 'Slett laget', action: () => editSkeleton({ kind: 'remove', spline: hit.shape }, 'Slettet laget') },
       ]);
     }
@@ -783,11 +940,16 @@ declare global {
       ringScreen(spline: number, station: number, i: number): { x: number; y: number } | null;
       cameraPosition(): Vec3;
       /** Forelder, feste og orientering. */
-      splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number } | null;
+      splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number; endParent: number | null; endAt: number; parts: number } | null;
+      /** Antall trekanter i kroppen og om den vises (0 når den mangler). */
+      shapeInfo(shape: number): { triangles: number; visible: boolean };
     };
   }
 }
 window.creatureForgeTest = {
+  shapeInfo(shape) {
+    return viewport.shapeInfo(shape);
+  },
   gripNearCenter() {
     // Kontrollpunktet nærmest midten som ikke ligger oppå skjelettet (det har forrang).
     const rect = viewport.renderer.domElement.getBoundingClientRect();
@@ -844,7 +1006,7 @@ window.creatureForgeTest = {
   },
   splineInfo(spline) {
     const s = skeleton.spline(spline);
-    return s ? { parent: s.parent, at: s.at, orientation: s.orientation, layer: s.layer } : null;
+    return s ? { parent: s.parent, at: s.at, orientation: s.orientation, layer: s.layer, endParent: s.end_parent, endAt: s.end_at, parts: s.parts.length } : null;
   },
   splineAnchorsWorld(spline) {
     return skeleton.spline(spline)?.anchors.map((a) => a.position) ?? null;

@@ -54,7 +54,9 @@ interface Drag {
   ctrl: boolean;
   /** Redigeringer fra tidligere moduser i samme drag. */
   frozen: SkeletonEdit[];
-  mode: TipMode | 'free';
+  mode: TipMode | 'free' | 'axis';
+  /** Planet et punkt flyttes i med Alt: normalen er aksen som peker mest mot kameraet. */
+  axis: 'x' | 'y' | 'z' | null;
   grip: GripDrag | null;
   bend: { drag: BendDrag; from: number; start: THREE.Vector3 } | null;
   /** Punktet på en annen spline som enden snapper til. */
@@ -66,6 +68,8 @@ interface Drag {
   /** Splinene festet kan gå over på i krysset ved pekeren. */
   routeOptions?: number[];
   touch: boolean;
+  /** Skjelettet slik det var da draget startet. */
+  before: SplineView[];
 }
 
 /**
@@ -168,12 +172,14 @@ export class SkeletonTool {
       ctrl: e.ctrlKey || e.metaKey,
       frozen: [],
       mode: 'free',
+      axis: null,
       grip: null,
       bend: null,
       snap: null,
       grabOffset: this.viewport.toScreen(pick.position).sub(this.canvasPoint(mouse)),
       route: null,
       touch,
+      before: this.view.splines,
     });
     const ps = this.spline(pick.spline);
     if (pick.kind === 'anchor' && pick.index === 0 && ps?.parent != null) {
@@ -196,8 +202,9 @@ export class SkeletonTool {
     return this.latest.find((s) => s.id === id) ?? null;
   }
 
-  private tipMode(drag: Drag): TipMode | 'free' {
-    if (!drag.tip) return 'free';
+  private tipMode(drag: Drag): TipMode | 'free' | 'axis' {
+    // Et punkt flyttes fritt i synsplanet; med Alt i xyz-planet som vender mest mot kameraet.
+    if (!drag.tip) return drag.alt && drag.pick.kind === 'anchor' && !drag.route ? 'axis' : 'free';
     if (drag.alt) return drag.shift ? 'bend' : 'plane';
     return 'pull';
   }
@@ -209,6 +216,12 @@ export class SkeletonTool {
     if ((mode === 'pull' || mode === 'plane') && (drag.mode === 'pull' || drag.mode === 'plane') && drag.grip) {
       drag.mode = mode;
       drag.grip.update(drag.mouse, mode);
+      return;
+    }
+    // Mellom fri flytting og flytting i et akseplan fortsetter grepet der det er.
+    if ((mode === 'free' || mode === 'axis') && (drag.mode === 'free' || drag.mode === 'axis') && drag.grip) {
+      drag.mode = mode;
+      drag.grip = this.anchorGrip(drag, drag.grip.tip);
       return;
     }
     const current = drag.mode === 'free' && drag.grip === null && drag.bend === null ? null : this.edit(drag, false);
@@ -230,9 +243,24 @@ export class SkeletonTool {
       const p = v3(a.position);
       drag.grip = new GripDrag(p, v3(a.tangent).normalize(), p, mode, drag.mouse, projector);
     } else {
-      const p = drag.pick.position;
-      drag.grip = new GripDrag(p, new THREE.Vector3(0, 1, 0), p, 'screen', drag.mouse, projector);
+      drag.grip = this.anchorGrip(drag, drag.pick.position);
     }
+  }
+
+  /** Grepet for et punkt som flyttes fritt eller i akseplanet (Alt), fra `p`. */
+  private anchorGrip(drag: Drag, p: THREE.Vector3) {
+    const projector = this.viewport.projector;
+    if (drag.mode !== 'axis') {
+      drag.axis = null;
+      return new GripDrag(p, new THREE.Vector3(0, 1, 0), p, 'screen', drag.mouse, projector);
+    }
+    const look = new THREE.Vector3();
+    this.viewport.camera.getWorldDirection(look);
+    const a = [Math.abs(look.x), Math.abs(look.y), Math.abs(look.z)];
+    const k = a.indexOf(Math.max(...a));
+    drag.axis = (['x', 'y', 'z'] as const)[k];
+    const normal = new THREE.Vector3().setComponent(k, 1);
+    return new GripDrag(p, normal, p, 'plane', drag.mouse, projector);
   }
 
   private onMove(e: PointerEvent) {
@@ -269,6 +297,22 @@ export class SkeletonTool {
     drag.bend.drag.scroll(e.deltaY);
     drag.moved = true;
     this.step(drag);
+  }
+
+  /** Splinen og alle spliner som henger på den: grener og ender koblet dit. */
+  private dependents(id: number) {
+    const out = new Set<number>([id]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const s of this.latest) {
+        if (out.has(s.id)) continue;
+        if ((s.parent !== null && out.has(s.parent)) || (s.end_parent !== null && out.has(s.end_parent))) {
+          out.add(s.id);
+          grew = true;
+        }
+      }
+    }
+    return out;
   }
 
   /** Splinen og alle undergrener under den. */
@@ -354,19 +398,26 @@ export class SkeletonTool {
     const { pick } = drag;
     if (!drag.grip || drag.shift || pick.kind !== 'anchor') return null;
     if (pick.index === 0 && this.spline(pick.spline)?.parent != null) return null;
-    // Splinen selv og grenene på den kan ikke være mål.
-    const exclude = new Set<number>([pick.spline]);
-    for (let grew = true; grew; ) {
-      grew = false;
-      for (const s of this.latest) {
-        if (s.parent !== null && exclude.has(s.parent) && !exclude.has(s.id)) {
-          exclude.add(s.id);
-          grew = true;
-        }
-      }
-    }
+    // Splinen selv og alt som henger på den (grener og ender koblet dit)
+    // kan ikke være mål, ellers ville koblingen gå i sløyfe.
+    const exclude = this.dependents(pick.spline);
     const screen = this.canvasPoint(drag.mouse).add(drag.grabOffset);
     return this.view.snapTarget(screen, SNAP_RADIUS_PX, exclude);
+  }
+
+  /**
+   * Splinen og andelen en kontur som dras havner på. Konturen blir på
+   * splinen sin til pekeren er tydelig nærmere en annen spline.
+   */
+  private ringTarget(drag: Drag) {
+    const own = this.view.nearestOn(drag.pick.spline, drag.mouse.x, drag.mouse.y);
+    let best = own ? { spline: drag.pick.spline, at: own.at, d: own.d } : null;
+    for (const s of this.latest) {
+      if (s.id === drag.pick.spline || s.hidden || s.locked) continue;
+      const near = this.view.nearestOn(s.id, drag.mouse.x, drag.mouse.y);
+      if (near && near.d < 24 && (!best || near.d + 4 < best.d)) best = { spline: s.id, at: near.at, d: near.d };
+    }
+    return best;
   }
 
   /** Redigeringen for hele draget så langt. */
@@ -374,10 +425,14 @@ export class SkeletonTool {
     const { pick } = drag;
     let current: SkeletonEdit;
     if (pick.kind === 'ring') {
-      // Konturen flyttes langs splinen til punktet nærmest pekeren.
-      const st = this.spline(pick.spline)!.profiles[pick.station];
-      const near = this.view.nearestOn(pick.spline, drag.mouse.x, drag.mouse.y);
-      current = { kind: 'setStation', spline: pick.spline, station: pick.station, at: near ? near.at : st.at, scale: st.scale, rotation: st.rotation };
+      // Konturen flyttes langs splinen til punktet nærmest pekeren, eller
+      // over på en annen spline når pekeren er nærmere den.
+      const st = drag.before.find((s) => s.id === pick.spline)!.profiles[pick.station];
+      const target = this.ringTarget(drag);
+      current =
+        target && target.spline !== pick.spline
+          ? { kind: 'moveProfile', spline: pick.spline, station: pick.station, to: target.spline, at: target.at }
+          : { kind: 'setStation', spline: pick.spline, station: pick.station, at: target ? target.at : st.at, scale: st.scale, rotation: st.rotation };
     } else if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       current = { kind: 'bend', spline: pick.spline, from: drag.bend.from, direction: arr(b.direction), angle: b.angle, radius: b.radius };
@@ -391,6 +446,10 @@ export class SkeletonTool {
       current = { kind: 'reattach', spline: pick.spline, at: drag.route.at, parent: drag.route.parent };
     } else if (drag.tip) {
       current = { kind: 'moveTip', spline: pick.spline, position: arr(drag.snap?.position ?? drag.grip!.tip) };
+      // Enden festes til splinen den snapper til og følger den siden (nett).
+      if (drag.snap) {
+        current = { kind: 'batch', edits: [current, { kind: 'attachEnd', spline: pick.spline, target: drag.snap.spline, at: drag.snap.at }] };
+      }
     } else {
       current = { kind: 'moveAnchor', spline: pick.spline, index: pick.index, position: arr(drag.snap?.position ?? drag.grip!.tip) };
     }
@@ -405,7 +464,14 @@ export class SkeletonTool {
 
   private describeMove(drag: Drag) {
     if (drag.pick.kind === 'curve') return 'Flytt hele formen';
-    if (drag.pick.kind === 'ring') return `Flytt kontur ${drag.pick.station + 1} langs splinen`;
+    if (drag.pick.kind === 'ring') {
+      const target = this.ringTarget(drag);
+      if (target && target.spline !== drag.pick.spline) {
+        const s = this.spline(target.spline);
+        return `Flytt kontur ${drag.pick.station + 1} over på ${s?.parent === null ? 'hovedsplinen' : s?.name || `gren ${target.spline}`}`;
+      }
+      return `Flytt kontur ${drag.pick.station + 1} langs splinen`;
+    }
     if (drag.bend) {
       const b = drag.bend.drag.params(drag.ctrl);
       const snap = drag.ctrl ? ' (snapper 15°)' : '';
@@ -415,13 +481,17 @@ export class SkeletonTool {
     if (drag.mode === 'pull') return 'Trekk ut langs enden';
     if (drag.mode === 'plane') return 'Panorer tuppen (Alt)';
     if (drag.pick.kind === 'handle') return 'Flytt håndtak';
+    if (drag.mode === 'axis') {
+      const plane = { x: 'YZ', y: 'XZ', z: 'XY' }[drag.axis!];
+      return `Flytt punkt i ${plane}-planet (Alt)`;
+    }
     if (drag.route) {
       const on = this.spline(drag.route.parent);
       const name = (s: SplineView | null) => (!s ? '' : s.parent === null ? 'hovedsplinen' : s.name || `Gren ${s.id}`);
       const options = (drag.routeOptions ?? []).map((id) => name(this.spline(id)));
       return `Flytt festet langs ${name(on)}${options.length ? ` · dra videre inn på ${options.join(' eller ')}` : ''}`;
     }
-    return 'Flytt punkt';
+    return 'Flytt punkt fritt (Alt: i xyz-planet mot kameraet)';
   }
 
   private requestPreview(edit: SkeletonEdit) {
@@ -469,8 +539,13 @@ export class SkeletonTool {
     const edit = this.edit(drag, true);
     if (drag.pick.kind === 'ring' && edit.kind === 'setStation') {
       // Konturene sorteres etter plass; valget følger konturen som ble flyttet.
-      const others = this.spline(drag.pick.spline)!.profiles.filter((_, i) => i !== (drag.pick as RingPick).station);
+      const others = drag.before.find((s) => s.id === drag.pick.spline)!.profiles.filter((_, i) => i !== (drag.pick as RingPick).station);
       this.view.select({ spline: drag.pick.spline, index: null, station: others.filter((p) => p.at <= edit.at).length });
+      this.cb.selectionChanged();
+    } else if (edit.kind === 'moveProfile') {
+      // Valget følger konturen over på den nye splinen.
+      const target = drag.before.find((s) => s.id === edit.to)!.profiles;
+      this.view.select({ spline: edit.to, index: null, station: target.filter((p) => p.at <= edit.at).length });
       this.cb.selectionChanged();
     }
     this.cb.commit(edit, this.describe(drag).split(' · scroll')[0]);

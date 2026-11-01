@@ -109,6 +109,94 @@ pub struct Spline {
     /// Hvordan en gren følger forelderen. Uten betydning for rotspliner.
     #[serde(default)]
     pub orientation: Orientation,
+    /// Enden er koblet til et punkt på en annen spline, så spliner kan danne
+    /// et nett. Tuppen følger punktet når den andre splinen endres.
+    #[serde(default)]
+    pub end: Option<Attachment>,
+    /// Ferdige 3D-mesher (horn, klør, øyne …) satt inn langs splinen.
+    #[serde(default)]
+    pub parts: Vec<Part>,
+    /// Laget trekkes fra andre lag (negativ form). Gjelder bare rotspliner.
+    #[serde(default)]
+    pub cut: Option<Cut>,
+}
+
+/// Et lag som trekkes fra («− Trekk fra») i stedet for å legges til
+/// (issue #12 punkt 4). Formen forblir et redigerbart lag. Hva den skjærer i
+/// er en egen relasjon, uavhengig av forelder, feste og rekkefølgen i
+/// laglisten, så omorganisering endrer aldri hvilke deler som kuttes.
+/// Utskjæringen skjer i avstandsfeltet; skjelettet og festene i målet
+/// berøres ikke, så splinefester blir stående selv om materialet rundt dem
+/// fjernes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cut {
+    /// Lagene (rotsplinene) formen skjærer i.
+    #[serde(default)]
+    pub targets: Vec<SplineId>,
+    /// Utskjæringen er aktiv. Av: kutteren vises, men skjærer ikke.
+    /// Om kutteren vises styres separat av lagets synlighet.
+    #[serde(default = "default_true")]
+    pub active: bool,
+    /// Skarp kant mot kuttet i stedet for myk overgang.
+    #[serde(default)]
+    pub sharp: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Hvor en mesh-del kommer fra: de innebygde formene eller en importert mesh.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PartSource {
+    Builtin { name: String },
+    Stored { id: u32 },
+}
+
+/// En mesh-del på en spline. Delen står i rammen ved andelen `at`: langs
+/// kurven, eller ut fra overflaten (`outward`) i retningen `rotation` rundt
+/// kurven. `size` er høyden i mm.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Part {
+    pub source: PartSource,
+    pub at: f64,
+    pub size: f64,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default)]
+    pub outward: bool,
+}
+
+/// En importert mesh i delregisteret, normalisert til høyde 1 langs +Y med
+/// foten i origo.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartMesh {
+    pub name: String,
+    pub positions: Vec<Vec3>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// Innstillinger for meshen (Innstillinger → Mesh).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MeshSettings {
+    /// Hvor mange ganger kanter i knekker deles (0 = av).
+    pub crease_detail: u32,
+    /// Vinkelen mellom nabotrekanter i grader der en knekk begynner.
+    pub crease_angle: f64,
+}
+
+impl Default for MeshSettings {
+    fn default() -> Self {
+        MeshSettings {
+            crease_detail: 2,
+            crease_angle: 25.0,
+        }
+    }
+}
+
+impl MeshSettings {
+    pub const MAX_DETAIL: u32 = 3;
 }
 
 /// Ortonormal ramme: tangent T og tverretningene U og V.
@@ -518,6 +606,57 @@ pub enum SkeletonEdit {
         #[serde(default)]
         parent: Option<SplineId>,
     },
+    /// Fester enden av splinen til andelen `at` av splinen `target`.
+    AttachEnd {
+        spline: SplineId,
+        target: SplineId,
+        at: f64,
+    },
+    /// Løsner enden; tuppen blir stående der den er.
+    DetachEnd {
+        spline: SplineId,
+    },
+    /// Flytter en kontur over på en annen spline (eller langs samme).
+    MoveProfile {
+        spline: SplineId,
+        station: usize,
+        to: SplineId,
+        at: f64,
+    },
+    /// Setter inn en mesh-del på splinen.
+    AddPart {
+        spline: SplineId,
+        part: Part,
+        /// Delen står ut fra overflaten i retningen nærmest denne.
+        #[serde(default)]
+        toward: Option<Vec3>,
+    },
+    SetPart {
+        spline: SplineId,
+        index: usize,
+        part: Part,
+    },
+    RemovePart {
+        spline: SplineId,
+        index: usize,
+    },
+    /// Legger en importert mesh i delregisteret.
+    ImportPart {
+        name: String,
+        positions: Vec<Vec3>,
+        triangles: Vec<[u32; 3]>,
+    },
+    /// Fjerner en importert mesh og delene som bruker den.
+    RemovePartMesh {
+        id: u32,
+    },
+    /// Speilmodus: alt speiles om planet x = 0.
+    SetMirror {
+        mirror: bool,
+    },
+    SetMeshSettings {
+        settings: MeshSettings,
+    },
     /// Bytter hvordan grenen følger forelderen, uten at den flytter seg.
     SetOrientation {
         spline: SplineId,
@@ -614,6 +753,12 @@ pub enum SkeletonEdit {
     RemoveEntry {
         entry: u32,
     },
+    /// Gjør laget med rotsplinen `spline` til en negativ form som skjærer i
+    /// lagene i `cut.targets`, eller tilbake til en vanlig form (`None`).
+    SetCut {
+        spline: SplineId,
+        cut: Option<Cut>,
+    },
     /// Skjuler eller låser laget med rotsplinen `spline`. Tillatt også når
     /// laget er låst, så det kan låses opp.
     SetLayer {
@@ -657,6 +802,7 @@ impl Skeleton {
     pub fn apply(&mut self, edit: &SkeletonEdit) -> Result<Option<SplineId>, String> {
         let mut next = self.clone();
         let created = next.apply_inner(edit)?;
+        next.prune_cuts();
         *self = next;
         Ok(created)
     }
@@ -700,8 +846,20 @@ impl Skeleton {
                 spline,
                 index,
                 position,
-            } => self.move_anchor(spline, index, position)?,
+            } => {
+                if index + 1
+                    == self
+                        .spline(spline)
+                        .ok_or("Splinen finnes ikke")?
+                        .anchors
+                        .len()
+                {
+                    self.detach_end(spline)?;
+                }
+                self.move_anchor(spline, index, position)?
+            }
             E::MoveTip { spline, position } => {
+                self.detach_end(spline)?;
                 let last = self
                     .spline(spline)
                     .ok_or("Splinen finnes ikke")?
@@ -732,6 +890,7 @@ impl Skeleton {
                 self.set_world_anchors(spline, anchors)?
             }
             E::Extend { spline, delta } => {
+                self.detach_end(spline)?;
                 let world = self.world_spline(spline)?;
                 let last = world.segments.last().unwrap();
                 let t = bezier_tangent(last, 1.0).ok_or("Enden mangler retning")?;
@@ -751,11 +910,115 @@ impl Skeleton {
                 if from + 1 >= world.anchors.len() {
                     return Err("Bøyen må starte før siste punkt".into());
                 }
+                self.detach_end(spline)?;
+                let world = self.world_spline(spline)?;
                 let bend = crate::bend::Bend::at_middle(direction, angle, radius);
                 let anchors = crate::bend::bend_from(&world, world.anchor_fraction(from), &bend)?;
                 self.set_world_anchors(spline, anchors)?
             }
             E::Reattach { spline, at, parent } => self.reattach(spline, parent, at)?,
+            E::AttachEnd { spline, target, at } => self.attach_end(spline, target, at)?,
+            E::DetachEnd { spline } => self.detach_end(spline)?,
+            E::MoveProfile {
+                spline,
+                station,
+                to,
+                at,
+            } => {
+                if self.is_locked(to) {
+                    return Err("Laget er låst".into());
+                }
+                if !(0.0..=1.0).contains(&at) {
+                    return Err("Konturen må ligge på splinen".into());
+                }
+                let st = Station {
+                    at,
+                    ..self.station(spline, station)?.clone()
+                };
+                self.splines
+                    .get_mut(&spline)
+                    .unwrap()
+                    .profiles
+                    .remove(station);
+                self.update(to, |s| {
+                    s.profiles.push(st);
+                    s.profiles.sort_by(|a, b| a.at.total_cmp(&b.at));
+                })?
+            }
+            E::AddPart {
+                spline,
+                ref part,
+                toward,
+            } => {
+                self.check_part(part)?;
+                let mut part = part.clone();
+                if let Some(d) = toward {
+                    let f = self.world_spline(spline)?.frame_at(part.at);
+                    part.rotation = dot(d, f.v).atan2(dot(d, f.u));
+                    part.outward = true;
+                }
+                self.update(spline, |s| s.parts.push(part))?
+            }
+            E::SetPart {
+                spline,
+                index,
+                ref part,
+            } => {
+                self.check_part(part)?;
+                let part = part.clone();
+                self.update(spline, |s| {
+                    if let Some(p) = s.parts.get_mut(index) {
+                        *p = part;
+                    }
+                })?;
+                if self.splines[&spline].parts.len() <= index {
+                    return Err("Delen finnes ikke".into());
+                }
+            }
+            E::RemovePart { spline, index } => {
+                if self
+                    .spline(spline)
+                    .ok_or("Splinen finnes ikke")?
+                    .parts
+                    .len()
+                    <= index
+                {
+                    return Err("Delen finnes ikke".into());
+                }
+                self.update(spline, |s| {
+                    s.parts.remove(index);
+                })?
+            }
+            E::ImportPart {
+                ref name,
+                ref positions,
+                ref triangles,
+            } => {
+                let mesh = PartMesh {
+                    name: valid_name(name)?,
+                    positions: positions.clone(),
+                    triangles: triangles.clone(),
+                };
+                validate_part_mesh(&mesh)?;
+                let id = self.part_meshes.keys().next_back().map_or(1, |k| k + 1);
+                self.part_meshes.insert(id, mesh);
+            }
+            E::RemovePartMesh { id } => {
+                self.part_meshes.remove(&id).ok_or("Delen finnes ikke")?;
+                let used = PartSource::Stored { id };
+                for s in self.splines.values_mut() {
+                    s.parts.retain(|p| p.source != used);
+                }
+            }
+            E::SetMirror { mirror } => self.mirror = mirror,
+            E::SetMeshSettings { settings } => {
+                if settings.crease_detail > MeshSettings::MAX_DETAIL
+                    || !(1.0..=90.0).contains(&settings.crease_angle)
+                {
+                    return Err("Ugyldige meshinnstillinger".into());
+                }
+                self.settings = settings;
+            }
             E::SetOrientation {
                 spline,
                 orientation,
@@ -934,6 +1197,7 @@ impl Skeleton {
                     s.locked = locked;
                 })?
             }
+            E::SetCut { spline, ref cut } => self.set_cut(spline, cut.clone())?,
             E::Batch { ref edits } => {
                 let mut created = None;
                 for e in edits {
@@ -966,6 +1230,22 @@ pub struct SplineView {
     pub hidden: bool,
     pub locked: bool,
     pub orientation: Orientation,
+    /// Splinen og andelen enden er koblet til, hvis den er det.
+    pub end_parent: Option<SplineId>,
+    pub end_at: f64,
+    pub parts: Vec<PartView>,
+    /// Negativ form: lagene laget skjærer i. Bare for rotspliner.
+    pub cut: Option<Cut>,
+}
+
+/// En mesh-del med foten og høyderetningen i verdenskoordinater.
+#[derive(Clone, Debug, Serialize)]
+pub struct PartView {
+    #[serde(flatten)]
+    pub part: Part,
+    pub name: String,
+    pub base: Vec3,
+    pub axis: Vec3,
 }
 
 /// En profilstasjon slik visningen og profileditoren trenger den.
@@ -1086,6 +1366,32 @@ impl Skeleton {
                     anchors,
                     profiles,
                     flat_end: spline.flat_end,
+                    end_parent: spline.end.map(|e| e.parent),
+                    end_at: spline.end.map_or(0.0, |e| e.at),
+                    cut: spline.cut.clone(),
+                    parts: spline
+                        .parts
+                        .iter()
+                        .map(|part| {
+                            let (base, axes) = crate::parts::placement(
+                                &w.frame_at(part.at),
+                                part,
+                                spline.thickness,
+                            );
+                            PartView {
+                                name: match &part.source {
+                                    PartSource::Builtin { name } => name.clone(),
+                                    PartSource::Stored { id } => self
+                                        .part_meshes
+                                        .get(id)
+                                        .map_or_else(String::new, |m| m.name.clone()),
+                                },
+                                part: part.clone(),
+                                base,
+                                axis: axes[1],
+                            }
+                        })
+                        .collect(),
                 })
             })
             .collect()
@@ -1104,6 +1410,14 @@ pub struct Skeleton {
     /// En oppføring kopieres når den brukes og kobles ikke varig.
     #[serde(default)]
     registry: BTreeMap<u32, RegistryEntry>,
+    /// Delregisteret: importerte mesher som kan settes inn på spliner.
+    #[serde(default)]
+    part_meshes: BTreeMap<u32, PartMesh>,
+    /// Speilmodus om planet x = 0, for hele modellen.
+    #[serde(default)]
+    mirror: bool,
+    #[serde(default)]
+    settings: MeshSettings,
 }
 
 /// En lagret profil (én kontur) eller et volum (flere konturer langs en spline).
@@ -1114,6 +1428,39 @@ pub struct RegistryEntry {
     /// er `at` plassen langs splinen volumet legges på.
     pub stations: Vec<Station>,
     pub volume: bool,
+}
+
+/// Delregisteret og innstillingene slik visningen trenger dem.
+#[derive(Clone, Debug, Serialize)]
+pub struct LibraryView {
+    pub parts: Vec<PartEntryView>,
+    pub mirror: bool,
+    pub settings: MeshSettings,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PartEntryView {
+    pub source: PartSource,
+    pub name: String,
+}
+
+/// Største importerte mesh i delregisteret.
+pub const MAX_PART_TRIANGLES: usize = 200_000;
+
+fn validate_part_mesh(m: &PartMesh) -> Result<(), String> {
+    if m.triangles.is_empty() || m.triangles.len() > MAX_PART_TRIANGLES {
+        return Err(format!(
+            "En del må ha mellom 1 og {MAX_PART_TRIANGLES} trekanter"
+        ));
+    }
+    if m.positions.iter().flatten().any(|x| !x.is_finite()) {
+        return Err("Delen har ugyldige tall".into());
+    }
+    let n = m.positions.len() as u32;
+    if m.triangles.iter().flatten().any(|&i| i >= n) {
+        return Err("Delen har ugyldige trekanter".into());
+    }
+    Ok(())
 }
 
 /// En oppføring i registeret slik visningen trenger den.
@@ -1142,6 +1489,9 @@ impl Skeleton {
             splines: BTreeMap::new(),
             masters: BTreeMap::new(),
             registry: BTreeMap::new(),
+            part_meshes: BTreeMap::new(),
+            mirror: false,
+            settings: MeshSettings::default(),
         }
     }
 
@@ -1189,6 +1539,9 @@ impl Skeleton {
             hidden: false,
             locked: false,
             orientation: Orientation::FollowParent,
+            end: None,
+            parts: Vec::new(),
+            cut: None,
         };
         self.insert(spline)
     }
@@ -1216,6 +1569,9 @@ impl Skeleton {
             hidden: false,
             locked: false,
             orientation: Orientation::FollowParent,
+            end: None,
+            parts: Vec::new(),
+            cut: None,
         };
         self.insert(spline)
     }
@@ -1235,7 +1591,20 @@ impl Skeleton {
         if !self.splines.contains_key(&id) {
             return Err("Splinen finnes ikke".into());
         }
-        for d in self.descendants(id) {
+        let removed = self.descendants(id);
+        // Ender koblet til en spline som fjernes, blir stående der de er.
+        let pinned: Vec<SplineId> = self
+            .splines
+            .iter()
+            .filter(|(k, s)| {
+                !removed.contains(k) && s.end.is_some_and(|e| removed.contains(&e.parent))
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for p in pinned {
+            self.detach_end(p)?;
+        }
+        for d in removed {
             self.splines.remove(&d);
         }
         Ok(())
@@ -1275,32 +1644,76 @@ impl Skeleton {
         Ok(Self::placement(spline, self.attachment_frame(&a)?).0)
     }
 
-    /// Splinen i verdenskoordinater. Forfedrene evalueres først.
+    /// Splinen i verdenskoordinater. Forfedrene og splinen enden er koblet
+    /// til, evalueres først.
     pub fn world_spline(&self, id: SplineId) -> Result<WorldSpline, String> {
-        let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
-        match spline.attachment {
-            None => WorldSpline::new(spline.anchors.clone(), spline.up),
-            Some(a) => {
-                let (frame, up) = Self::placement(spline, self.attachment_frame(&a)?);
-                WorldSpline::new(to_world(&frame, &spline.anchors), up)
-            }
-        }
+        self.world_rec(id, 0)
     }
 
-    /// Alle spliner i verdenskoordinater.
+    fn world_rec(&self, id: SplineId, depth: usize) -> Result<WorldSpline, String> {
+        if depth > self.splines.len() {
+            return Err("Splinene er koblet i en sløyfe".into());
+        }
+        let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
+        let parent = match spline.attachment {
+            Some(a) => Some(self.world_rec(a.parent, depth + 1)?),
+            None => None,
+        };
+        let end = match spline.end {
+            Some(e) => Some(self.world_rec(e.parent, depth + 1)?.point_at(e.at)),
+            None => None,
+        };
+        Self::place(spline, parent.as_ref(), end)
+    }
+
+    /// Splinen i verdenskoordinater fra forelderen og punktet enden er koblet til.
+    fn place(
+        spline: &Spline,
+        parent: Option<&WorldSpline>,
+        end: Option<Vec3>,
+    ) -> Result<WorldSpline, String> {
+        let (mut anchors, up) = match (spline.attachment, parent) {
+            (Some(a), Some(p)) => {
+                let (frame, up) = Self::placement(spline, p.frame_at(a.at));
+                (to_world(&frame, &spline.anchors), up)
+            }
+            _ => (spline.anchors.clone(), spline.up),
+        };
+        if let Some(e) = end {
+            anchors.last_mut().unwrap().position = e;
+        }
+        WorldSpline::new(anchors, up)
+    }
+
+    /// Alle spliner i verdenskoordinater, i rekkefølgen de avhenger av
+    /// hverandre: forelderen og splinen enden er koblet til kommer først.
     pub fn evaluate(&self) -> Result<BTreeMap<SplineId, WorldSpline>, String> {
         let mut out: BTreeMap<SplineId, WorldSpline> = BTreeMap::new();
-        for root in self.splines.iter().filter(|(_, s)| s.attachment.is_none()) {
-            for id in self.descendants(*root.0) {
-                let s = &self.splines[&id];
-                let world = match s.attachment {
-                    None => WorldSpline::new(s.anchors.clone(), s.up)?,
-                    Some(a) => {
-                        let (frame, up) = Self::placement(s, out[&a.parent].frame_at(a.at));
-                        WorldSpline::new(to_world(&frame, &s.anchors), up)?
-                    }
+        while out.len() < self.splines.len() {
+            let before = out.len();
+            for (id, s) in &self.splines {
+                if out.contains_key(id) {
+                    continue;
+                }
+                let parent = match s.attachment {
+                    Some(a) => match out.get(&a.parent) {
+                        Some(p) => Some(p),
+                        None => continue,
+                    },
+                    None => None,
                 };
-                out.insert(id, world);
+                let end = match s.end {
+                    Some(e) => match out.get(&e.parent) {
+                        Some(t) => Some(t.point_at(e.at)),
+                        None => continue,
+                    },
+                    None => None,
+                };
+                let world = Self::place(s, parent, end)?;
+                out.insert(*id, world);
+            }
+            if out.len() == before {
+                return Err("Splinene er koblet i en sløyfe".into());
             }
         }
         Ok(out)
@@ -1428,6 +1841,46 @@ impl Skeleton {
         self.update(id, |s| s.attachment = Some(Attachment { parent, at }))
     }
 
+    /// Kobler enden av splinen til andelen `at` av `target`. Tuppen flyttes
+    /// dit og følger etter når `target` endres. En spline kan ikke kobles til
+    /// seg selv eller til noe som avhenger av den (valideringen finner sløyfer).
+    pub fn attach_end(&mut self, id: SplineId, target: SplineId, at: f64) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&at) {
+            return Err("Enden må kobles til et punkt på splinen".into());
+        }
+        if id == target {
+            return Err("En spline kan ikke kobles til seg selv".into());
+        }
+        if !self.splines.contains_key(&target) {
+            return Err("Splinen finnes ikke".into());
+        }
+        let mut next = self.clone();
+        next.splines.get_mut(&id).ok_or("Splinen finnes ikke")?.end =
+            Some(Attachment { parent: target, at });
+        next.validate()
+            .map_err(|_| "Enden kan ikke kobles til en spline som henger på denne".to_string())?;
+        // Det lagrede punktet settes også til målet, så splinen står likt om
+        // koblingen løsnes.
+        let world = next.world_anchors(id)?;
+        next.set_world_anchors(id, world)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Løsner enden. Tuppen blir stående der den er nå.
+    pub fn detach_end(&mut self, id: SplineId) -> Result<(), String> {
+        let spline = self.splines.get(&id).ok_or("Splinen finnes ikke")?;
+        if spline.end.is_none() {
+            return Ok(());
+        }
+        let world = self.world_anchors(id)?;
+        let mut next = self.clone();
+        next.splines.get_mut(&id).unwrap().end = None;
+        next.set_world_anchors(id, world)?;
+        *self = next;
+        Ok(())
+    }
+
     /// Bytter hvordan grenen følger forelderen. Grenen står der den står; bare
     /// lagringen av punktene endres, så det blir ikke noe hopp.
     pub fn set_orientation(
@@ -1526,7 +1979,11 @@ impl Skeleton {
             | E::RemoveEntry { .. }
             // Å lagre en kontur i registeret endrer ikke laget den ligger i.
             | E::SaveProfile { .. }
-            | E::SaveVolume { .. } => None,
+            | E::SaveVolume { .. }
+            | E::ImportPart { .. }
+            | E::RemovePartMesh { .. }
+            | E::SetMirror { .. }
+            | E::SetMeshSettings { .. } => None,
             E::SetStations { spline, .. } => Some(spline),
             E::AddChild { parent, .. } => Some(parent),
             E::MoveAnchor { spline, .. }
@@ -1537,6 +1994,12 @@ impl Skeleton {
             | E::Extend { spline, .. }
             | E::Bend { spline, .. }
             | E::Reattach { spline, .. }
+            | E::AttachEnd { spline, .. }
+            | E::DetachEnd { spline }
+            | E::MoveProfile { spline, .. }
+            | E::AddPart { spline, .. }
+            | E::SetPart { spline, .. }
+            | E::RemovePart { spline, .. }
             | E::SetOrientation { spline, .. }
             | E::Translate { spline, .. }
             | E::SetThickness { spline, .. }
@@ -1548,7 +2011,8 @@ impl Skeleton {
             | E::MakeMaster { spline, .. }
             | E::LinkMaster { spline, .. }
             | E::Unlink { spline, .. }
-            | E::SetFlatEnd { spline, .. } => Some(spline),
+            | E::SetFlatEnd { spline, .. }
+            | E::SetCut { spline, .. } => Some(spline),
             E::SetMaster { master, .. } => {
                 // En master endrer alle koblede konturer, også i andre lag.
                 let linked = self.splines.iter().find(|(_, s)| {
@@ -1595,14 +2059,143 @@ impl Skeleton {
             .collect()
     }
 
+    /// En rotspline som ikke selv er en negativ form.
+    fn is_plain_root(&self, id: SplineId) -> bool {
+        self.splines
+            .get(&id)
+            .is_some_and(|s| s.attachment.is_none() && s.cut.is_none())
+    }
+
+    fn set_cut(&mut self, id: SplineId, cut: Option<Cut>) -> Result<(), String> {
+        let spline = self.spline(id).ok_or("Splinen finnes ikke")?;
+        if spline.attachment.is_some() {
+            return Err("Bare et helt lag kan trekkes fra".into());
+        }
+        let cut = match cut {
+            None => None,
+            Some(mut c) => {
+                if let Some((other, _)) = self
+                    .splines
+                    .iter()
+                    .find(|(_, s)| s.cut.as_ref().is_some_and(|c| c.targets.contains(&id)))
+                {
+                    return Err(format!(
+                        "Laget kuttes av lag {other} og kan ikke selv trekkes fra"
+                    ));
+                }
+                let mut seen = Vec::new();
+                for t in c.targets.drain(..) {
+                    if t == id || !self.is_plain_root(t) {
+                        return Err("En negativ form kan bare skjære i vanlige lag".into());
+                    }
+                    if !seen.contains(&t) {
+                        seen.push(t);
+                    }
+                }
+                c.targets = seen;
+                Some(c)
+            }
+        };
+        self.update(id, |s| s.cut = cut)
+    }
+
+    /// Fjerner kuttemål som ikke lenger er vanlige lag (slettet eller festet
+    /// som gren), og kutt på spliner som ikke lenger er rotspliner.
+    fn prune_cuts(&mut self) {
+        let plain: Vec<SplineId> = self
+            .splines
+            .iter()
+            .filter(|(_, s)| s.attachment.is_none() && s.cut.is_none())
+            .map(|(id, _)| *id)
+            .collect();
+        for s in self.splines.values_mut() {
+            if s.attachment.is_some() {
+                s.cut = None;
+            }
+            if let Some(c) = &mut s.cut {
+                c.targets.retain(|t| plain.contains(t));
+            }
+        }
+    }
+
+    /// De aktive negative formene som skjærer i laget `root`.
+    pub fn cutters_of(&self, root: SplineId) -> Vec<(SplineId, &Cut)> {
+        self.splines
+            .iter()
+            .filter_map(|(id, s)| s.cut.as_ref().map(|c| (*id, c)))
+            .filter(|(_, c)| c.active && c.targets.contains(&root))
+            .collect()
+    }
+
     pub fn masters(&self) -> &BTreeMap<MasterId, Profile> {
         &self.masters
+    }
+
+    /// Noe som gjelder alle kropper er endret.
+    pub fn shared_differs(&self, other: &Skeleton) -> bool {
+        self.masters != other.masters
+            || self.mirror != other.mirror
+            || self.settings != other.settings
+            || self.part_meshes != other.part_meshes
+    }
+
+    pub fn mirror(&self) -> bool {
+        self.mirror
+    }
+
+    pub fn settings(&self) -> MeshSettings {
+        self.settings
+    }
+
+    pub fn part_mesh(&self, id: u32) -> Option<&PartMesh> {
+        self.part_meshes.get(&id)
+    }
+
+    fn check_part(&self, part: &Part) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&part.at) {
+            return Err("Delen må ligge på splinen".into());
+        }
+        if !(part.size.is_finite() && part.size > 0.0) || !part.rotation.is_finite() {
+            return Err("Ugyldig størrelse på delen".into());
+        }
+        match &part.source {
+            PartSource::Builtin { name } if crate::parts::builtin(name).is_none() => {
+                Err(format!("Ukjent del: {name}"))
+            }
+            PartSource::Stored { id } if !self.part_meshes.contains_key(id) => {
+                Err("Delen finnes ikke i registeret".into())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Delregisteret, speilingen og meshinnstillingene for visningen.
+    pub fn library(&self) -> LibraryView {
+        let mut parts: Vec<PartEntryView> = crate::parts::BUILTIN
+            .iter()
+            .map(|name| PartEntryView {
+                source: PartSource::Builtin {
+                    name: (*name).into(),
+                },
+                name: (*name).into(),
+            })
+            .collect();
+        parts.extend(self.part_meshes.iter().map(|(id, m)| PartEntryView {
+            source: PartSource::Stored { id: *id },
+            name: m.name.clone(),
+        }));
+        LibraryView {
+            parts,
+            mirror: self.mirror,
+            settings: self.settings,
+        }
     }
 
     /// Endrer en spline og godtar endringen bare hvis hele skjelettet er gyldig.
     fn update(&mut self, id: SplineId, f: impl FnOnce(&mut Spline)) -> Result<(), String> {
         let mut next = self.clone();
         f(next.splines.get_mut(&id).ok_or("Splinen finnes ikke")?);
+        next.prune_cuts();
         next.validate()?;
         *self = next;
         Ok(())
@@ -1660,12 +2253,38 @@ impl Skeleton {
                     }
                 }
             }
+            for part in &s.parts {
+                self.check_part(part)?;
+            }
+            if let Some(e) = s.end {
+                if e.parent == *id || !self.splines.contains_key(&e.parent) {
+                    return Err(format!(
+                        "Enden av spline {id} er koblet til en ugyldig spline"
+                    ));
+                }
+                if !(0.0..=1.0).contains(&e.at) {
+                    return Err(format!("Enden av spline {id} er koblet utenfor splinen"));
+                }
+            }
+            if let Some(c) = &s.cut {
+                if s.attachment.is_some() {
+                    return Err(format!("Spline {id} er en gren; bare lag kan trekkes fra"));
+                }
+                for t in &c.targets {
+                    if *t == *id || !self.is_plain_root(*t) {
+                        return Err(format!("Lag {id} skjærer i et ugyldig lag"));
+                    }
+                }
+            }
             if *id >= self.next_id {
                 return Err("Ugyldig id i skjelettet".into());
             }
         }
         for m in self.masters.values() {
             m.validate()?;
+        }
+        for m in self.part_meshes.values() {
+            validate_part_mesh(m)?;
         }
         for e in self.registry.values() {
             for st in &e.stations {
@@ -2496,5 +3115,103 @@ mod tests {
                 name: "x".into()
             })
             .is_err());
+    }
+
+    #[test]
+    fn enden_kobles_tilbake_til_morsplinen_og_folger_med() {
+        let (mut sk, root, child, _) = three_levels();
+        // Grenen bøyes tilbake og kobles til morsplinen lenger ute.
+        sk.apply(&SkeletonEdit::AttachEnd {
+            spline: child,
+            target: root,
+            at: 0.9,
+        })
+        .unwrap();
+        let tip = |sk: &Skeleton| *world_points(sk, child).last().unwrap();
+        let target = sk.world_spline(root).unwrap().point_at(0.9);
+        assert!(close(tip(&sk), target, 1e-9));
+        // Morsplinen flyttes: festet og enden følger.
+        sk.apply(&SkeletonEdit::Translate {
+            spline: root,
+            delta: [3.0, 0.0, -2.0],
+        })
+        .unwrap();
+        let target = sk.world_spline(root).unwrap().point_at(0.9);
+        assert!(close(tip(&sk), target, 1e-9));
+        // Lagring og åpning beholder koblingen.
+        let opened = Skeleton::from_json(&sk.to_json()).unwrap();
+        assert_eq!(opened.spline(child).unwrap().end.unwrap().parent, root);
+        // Tuppen kan ikke kobles til seg selv eller noe som henger på den.
+        assert!(sk
+            .apply(&SkeletonEdit::AttachEnd {
+                spline: root,
+                target: child,
+                at: 0.5
+            })
+            .is_err());
+        assert!(sk
+            .apply(&SkeletonEdit::AttachEnd {
+                spline: child,
+                target: child,
+                at: 0.5
+            })
+            .is_err());
+        // Å flytte tuppen løsner koblingen.
+        let before = tip(&sk);
+        sk.apply(&SkeletonEdit::DetachEnd { spline: child })
+            .unwrap();
+        assert!(close(tip(&sk), before, 1e-9));
+        assert!(sk.spline(child).unwrap().end.is_none());
+        sk.apply(&SkeletonEdit::AttachEnd {
+            spline: child,
+            target: root,
+            at: 0.9,
+        })
+        .unwrap();
+        sk.apply(&SkeletonEdit::MoveTip {
+            spline: child,
+            position: [9.0, 9.0, 9.0],
+        })
+        .unwrap();
+        assert!(sk.spline(child).unwrap().end.is_none());
+        assert!(close(tip(&sk), [9.0, 9.0, 9.0], 1e-9));
+    }
+
+    #[test]
+    fn spliner_fra_to_lag_kan_danne_et_nett() {
+        let mut sk = Skeleton::new();
+        let a = sk
+            .add_root(
+                straight([0.0; 3], [1.0, 0.0, 0.0], 10.0),
+                [0.0, 1.0, 0.0],
+                1.0,
+            )
+            .unwrap();
+        let b = sk
+            .add_root(
+                straight([0.0, 5.0, 0.0], [1.0, 0.0, 0.0], 10.0),
+                [0.0, 1.0, 0.0],
+                1.0,
+            )
+            .unwrap();
+        sk.apply(&SkeletonEdit::AttachEnd {
+            spline: b,
+            target: a,
+            at: 1.0,
+        })
+        .unwrap();
+        // b henger på a, så a kan ikke kobles til b.
+        assert!(sk
+            .apply(&SkeletonEdit::AttachEnd {
+                spline: a,
+                target: b,
+                at: 0.0
+            })
+            .is_err());
+        // Fjernes a, blir enden av b stående der den var.
+        let tip = *world_points(&sk, b).last().unwrap();
+        sk.apply(&SkeletonEdit::Remove { spline: a }).unwrap();
+        assert!(sk.spline(b).unwrap().end.is_none());
+        assert!(close(*world_points(&sk, b).last().unwrap(), tip, 1e-9));
     }
 }

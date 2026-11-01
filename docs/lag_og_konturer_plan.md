@@ -40,7 +40,8 @@ Lagliste, navn, skjul og lås, aksekors, Bézier-verktøy for touch, langtrykk, 
 | 3 | Orienteringsvalg for grener, «Ny gren» med retningshåndtak, flytting av festet gjennom spline-nettverket | Gjort, se under |
 | 4 | «Ny kontur» der brukeren trykker, flytting langs splinen, konturredigering på modellen | Gjort, se under |
 | 5 | Konturregister, presets (sirkel, ellipse, egg, trekant), volumpreset, masterkobling | Gjort, se under |
-| 6 | Stabilisering før Surface Pen, Surface Brush og mirror | Ikke startet |
+| 6 | Nett av spliner, flere trekanter i knekker, mesh-deler, kontur over på annen spline, verktøylinje, fri punktflytting, speilmodus | Gjort, se avsnitt 8 |
+| 7 | Stabilisering før Surface Pen og Surface Brush | Ikke startet |
 
 ## 3 Trinn 2: lag og grunnrettinger
 
@@ -103,3 +104,13 @@ Mirror (til laginndelingen fungerer), frihåndstegning av barnesplines med penn 
 ## Plattform (Sivert 2026-10-30)
 
 Appen skal ikke fungere på telefon, fordi skjermen er for liten. Desktop er hovedmålet, og iPad Pro er det minste støttede nettbrettet. Vinduer under 700 × 480 px viser meldingen «Skjermen er for liten» i stedet for editoren. Mobiloppsettet for telefon (laglisteskuff, kompakt toppfelt) er fjernet. Playwright tester berøring på iPad Pro 11 (834 × 1194) og bare sperremeldingen på telefon. Konturredigeringen tilpasser zoomen til både bredde og høyde, slik at konturen får plass på et smalt lerret når nettbrettet står på høykant.
+
+## 8 Trinn 6: nett, knekker, mesh-deler og speil (Sivert 30. oktober 2026)
+
+- **Nett av spliner** (`Spline::end`). Når tuppen dras og snapper til en annen spline, festes enden der (`AttachEnd`). Tuppen følger punktet når den andre splinen endres, også når det er morsplinen eller en spline i et annet lag. Splinene evalueres i avhengighetsrekkefølge, og koblinger som ville gått i sløyfe avvises. Å dra, trekke ut eller bøye tuppen løsner enden; «Løsne enden» finnes i hurtigmenyen. Lagene smeltes ikke sammen: hver rot er fortsatt én kropp, men en kropp beregnes på nytt når en spline i den flytter seg fordi et annet lag endres.
+- **Flere trekanter i knekker** (Innstillinger → Mesh). Etter surface nets deles kanter der nabotrekantene står i større vinkel enn innstilt (standard 25°), og nye og berørte punkter flyttes inn på det eksakte avstandsfeltet med Newton-steg. Nivåene Av, Lav, Middels (standard) og Høy gir 0–3 delinger. Forhåndsvisningen under drag hopper over dette. Innstillingen ligger i skjelettet, så den angres og lagres med prosjektet.
+- **Mesh-deler** (`Spline::parts`, `parts.rs`). Innebygde former (Horn, Klo, Pigg, Tann, Øye) og importerte OBJ/STL-filer (normalisert til høyde 1 langs +Y) settes inn på en spline: langs kurven eller ut fra overflaten, med plass, høyde og rotasjon. Delene legges til kroppens mesh før uttrekkene, så uttrekk virker også på dem.
+- **Kontur over på en annen spline** (`MoveProfile`). En kontur som dras, følger splinen sin til pekeren er tydelig nærmere en annen spline, og flyttes da dit. Laglisten følger.
+- **Verktøylinje** til venstre for laglisten med Velg, Bézier, Ny spline, Ny gren, Ny kontur, Mesh-del, Speil og Innstillinger. På små skjermer ligger den vannrett øverst.
+- **Punkter flyttes fritt** i synsplanet. Med Alt flyttes et punkt i XY-, XZ- eller YZ-planet, det som vender mest mot kameraet. Tuppen beholder uttrekk, panorering og bøying.
+- **Speilmodus** (`Skeleton::mirror`) speiler hele modellen om x = 0: feltet tar minimum av punktet og speilbildet på et symmetrisk rutenett, uttrekk og mesh-deler speiles, og splinene vises stiplet på speilsiden.

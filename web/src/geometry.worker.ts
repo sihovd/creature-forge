@@ -51,6 +51,7 @@ function documentResult(shapes: number[], spacingMm: number, created: number | n
     shapes: shapes.filter((s) => s !== SKELETON_SHAPE).map((s) => shapeUpdate(s, spacingMm)),
     skeleton: JSON.parse(doc.skeletonView()),
     registry: JSON.parse(doc.registryView()),
+    library: JSON.parse(doc.libraryView()),
     created,
   };
 }
