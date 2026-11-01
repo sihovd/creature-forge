@@ -7,11 +7,13 @@
 pub mod curve;
 pub mod document;
 pub mod mesh;
+pub mod primitive;
 pub mod pull;
 pub mod refine;
 pub mod sphere;
 
 use document::{control_points, Document};
+use primitive::Primitive;
 use pull::Pull;
 use wasm_bindgen::prelude::*;
 
@@ -68,7 +70,7 @@ pub fn create_sphere(radius_mm: f64, target_edge_mm: f64) -> Result<MeshBuffers,
 /// Versjonen av geometriberegningene. Lagres i prosjektfiler (kap. 19).
 #[wasm_bindgen(js_name = geometryVersion)]
 pub fn geometry_version() -> u32 {
-    2
+    3
 }
 
 /// Dokumentet slik grensesnittet ser det gjennom workeren.
@@ -107,6 +109,34 @@ impl JsDocument {
         self.0
             .add_sphere([x, y, z], radius)
             .map_err(|e| JsError::new(&e))
+    }
+
+    /// Legger til en grunnform ("sphere", "capsule", "cone" eller "box") med
+    /// mål i mm: radius for kule; radius og høyde for kapsel og kjegle;
+    /// bredde, høyde og dybde for boks. Formen plasseres med bunnen på y = 0.
+    #[wasm_bindgen(js_name = addPrimitive)]
+    pub fn add_primitive(
+        &mut self,
+        kind: &str,
+        x: f64,
+        z: f64,
+        params: &[f64],
+    ) -> Result<u32, JsError> {
+        let prim = Primitive::from_parts(kind, params).map_err(|e| JsError::new(&e))?;
+        self.0
+            .add_primitive(prim, [x, prim.half_height(), z])
+            .map_err(|e| JsError::new(&e))
+    }
+
+    #[wasm_bindgen(js_name = removeShape)]
+    pub fn remove_shape(&mut self, shape: u32) -> Result<(), JsError> {
+        self.0.remove_shape(shape).map_err(|e| JsError::new(&e))
+    }
+
+    /// Navnet på grunnformen en kroppsdel ble laget med.
+    #[wasm_bindgen(js_name = shapeKind)]
+    pub fn shape_kind(&self, shape: u32) -> Option<String> {
+        self.0.primitive(shape).map(|p| p.kind().to_string())
     }
 
     /// Meshen til en form, eller `undefined` hvis formen ikke finnes.

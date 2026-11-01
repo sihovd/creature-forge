@@ -5,8 +5,16 @@
 /** Et grep i mm: [A (x, y, z), overflatenormal n0 (x, y, z), grep B (x, y, z), påvirkningsradius]. */
 export type PullParams = [number, number, number, number, number, number, number, number, number, number];
 
+/** Grunnformene kjernen kan lage. */
+export type PrimitiveKind = 'sphere' | 'capsule' | 'cone' | 'box';
+
 export type Command =
-  | { kind: 'addSphere'; center: [number, number, number]; radiusMm: number }
+  /**
+   * Ny kroppsdel med bunnen på rutenettet i (x, z). Mål i mm: radius for kule;
+   * radius og høyde for kapsel og kjegle; bredde, høyde og dybde for boks.
+   */
+  | { kind: 'addPrimitive'; primitive: PrimitiveKind; x: number; z: number; params: number[] }
+  | { kind: 'removeShape'; shape: number }
   | { kind: 'previewPull'; shape: number; pull: PullParams }
   | { kind: 'commitPull'; shape: number; pull: PullParams }
   | { kind: 'previewEdit'; shape: number; target: number; pull: PullParams }
@@ -25,6 +33,8 @@ export interface MeshResult {
 
 export interface ShapeUpdate {
   shape: number;
+  /** Grunnformen delen ble laget med, eller null når formen er fjernet. */
+  primitive: PrimitiveKind | null;
   /** Ny mesh, eller null når formen er fjernet (for eksempel ved angre). */
   mesh: MeshResult | null;
   /** Kontrollpunkter: x, y, z, nx, ny, nz per punkt. */

@@ -1,6 +1,13 @@
 /// <reference lib="webworker" />
 import init, { Document, geometryVersion, type MeshBuffers } from './core-pkg/cf_core.js';
-import type { GeometryRequest, GeometryResponse, GeometryResult, MeshResult, ShapeUpdate } from './protocol';
+import type {
+  GeometryRequest,
+  GeometryResponse,
+  GeometryResult,
+  MeshResult,
+  PrimitiveKind,
+  ShapeUpdate,
+} from './protocol';
 
 const TARGET_EDGE_MM = 1.5;
 
@@ -27,6 +34,7 @@ function shapeUpdate(shape: number, spacingMm: number): ShapeUpdate {
   const buffers = doc.mesh(shape);
   return {
     shape,
+    primitive: buffers ? ((doc.shapeKind(shape) ?? null) as PrimitiveKind | null) : null,
     mesh: buffers ? take(buffers) : null,
     controlPoints: buffers ? doc.controlPoints(shape, spacingMm) : new Float32Array(),
     centerlines: buffers ? doc.centerlines(shape) : new Float64Array(),
@@ -43,10 +51,14 @@ function documentResult(shapes: number[], spacingMm: number): GeometryResult {
 
 function run(req: GeometryRequest): GeometryResult {
   switch (req.kind) {
-    case 'addSphere': {
-      const [x, y, z] = req.center;
-      return documentResult([doc.addSphere(x, y, z, req.radiusMm)], req.spacingMm);
-    }
+    case 'addPrimitive':
+      return documentResult(
+        [doc.addPrimitive(req.primitive, req.x, req.z, Float64Array.from(req.params))],
+        req.spacingMm,
+      );
+    case 'removeShape':
+      doc.removeShape(req.shape);
+      return documentResult([req.shape], req.spacingMm);
     case 'previewPull':
       return { kind: 'preview', shape: req.shape, mesh: take(doc.previewPull(req.shape, Float64Array.from(req.pull))) };
     case 'commitPull':

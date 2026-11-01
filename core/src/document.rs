@@ -8,18 +8,23 @@
 //! uttrekk, slik at angre gjenoppretter de gamle parameterne.
 
 use crate::mesh::{length, normalize, sub, TriMesh, Vec3};
+use crate::primitive::{translate, Primitive};
 use crate::pull::{apply_pull, Pull};
-use crate::sphere::icosphere_for_edge;
 use std::collections::HashMap;
 
 pub type ShapeId = u32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Operation {
-    AddSphere {
+    /// Ny kroppsdel med en grunnform sentrert i `center`.
+    AddPrimitive {
         shape: ShapeId,
+        primitive: Primitive,
         center: Vec3,
-        radius: f64,
+    },
+    /// Fjerner en kroppsdel. Angre gir den tilbake med alle grepene.
+    RemoveShape {
+        shape: ShapeId,
     },
     Pull {
         shape: ShapeId,
@@ -36,7 +41,8 @@ pub enum Operation {
 impl Operation {
     pub fn shape(&self) -> ShapeId {
         match self {
-            Operation::AddSphere { shape, .. }
+            Operation::AddPrimitive { shape, .. }
+            | Operation::RemoveShape { shape }
             | Operation::Pull { shape, .. }
             | Operation::EditPull { shape, .. } => *shape,
         }
@@ -98,14 +104,37 @@ impl Document {
     }
 
     pub fn add_sphere(&mut self, center: Vec3, radius: f64) -> Result<ShapeId, String> {
+        self.add_primitive(Primitive::Sphere { radius }, center)
+    }
+
+    pub fn add_primitive(&mut self, primitive: Primitive, center: Vec3) -> Result<ShapeId, String> {
         let shape = self.next_shape;
-        self.apply(Operation::AddSphere {
+        self.apply(Operation::AddPrimitive {
             shape,
+            primitive,
             center,
-            radius,
         })?;
         self.next_shape += 1;
         Ok(shape)
+    }
+
+    pub fn remove_shape(&mut self, shape: ShapeId) -> Result<(), String> {
+        if !self.meshes.contains_key(&shape) {
+            return Err("Ukjent form".into());
+        }
+        self.apply(Operation::RemoveShape { shape })
+    }
+
+    /// Grunnformen en kroppsdel ble laget med.
+    pub fn primitive(&self, shape: ShapeId) -> Option<Primitive> {
+        self.history.iter().find_map(|op| match op {
+            Operation::AddPrimitive {
+                shape: s,
+                primitive,
+                ..
+            } if *s == shape => Some(*primitive),
+            _ => None,
+        })
     }
 
     /// Beregner resultatet av et uttrekk uten å endre dokumentet (forhåndsvisning under drag).
@@ -183,30 +212,41 @@ impl Document {
             // En redigering endrer en tidligere operasjon, så formen beregnes fra starten.
             Operation::EditPull { target, pull, .. } => self
                 .evaluate_shape(shape, Some((*target, *pull)))?
-                .ok_or("Ukjent form")?,
+                .ok_or("Ukjent form")
+                .map(Some)?,
             _ => self.evaluate(self.meshes.get(&shape), &op)?,
         };
-        self.meshes.insert(shape, mesh);
+        match mesh {
+            Some(m) => self.meshes.insert(shape, m),
+            None => self.meshes.remove(&shape),
+        };
         self.history.push(op);
         self.redo.clear();
         self.revision += 1;
         Ok(())
     }
 
-    fn evaluate(&self, current: Option<&TriMesh>, op: &Operation) -> Result<TriMesh, String> {
+    /// Formens mesh etter `op`, eller None når formen er fjernet.
+    fn evaluate(
+        &self,
+        current: Option<&TriMesh>,
+        op: &Operation,
+    ) -> Result<Option<TriMesh>, String> {
         match op {
-            Operation::AddSphere { center, radius, .. } => {
-                let mut m = icosphere_for_edge(*radius, self.target_edge)?;
-                for p in m.positions.iter_mut() {
-                    *p = [p[0] + center[0], p[1] + center[1], p[2] + center[2]];
-                }
-                Ok(m)
+            Operation::AddPrimitive {
+                primitive, center, ..
+            } => {
+                let mut m = primitive.mesh(self.target_edge)?;
+                translate(&mut m, *center);
+                Ok(Some(m))
             }
+            Operation::RemoveShape { .. } => Ok(None),
             Operation::Pull { pull, .. } => apply_pull(
                 current.ok_or("Uttrekk på en form som ikke finnes")?,
                 pull,
                 self.target_edge,
-            ),
+            )
+            .map(Some),
             Operation::EditPull { .. } => Err("En redigering beregnes via historikken".into()),
         }
     }
@@ -249,7 +289,7 @@ impl Document {
     ) -> Result<Option<TriMesh>, String> {
         let mut mesh: Option<TriMesh> = None;
         for (_, op) in self.effective(shape, extra) {
-            mesh = Some(self.evaluate(mesh.as_ref(), &op)?);
+            mesh = self.evaluate(mesh.as_ref(), &op)?;
         }
         Ok(mesh)
     }
@@ -299,6 +339,7 @@ pub fn control_points(mesh: &TriMesh, spacing: f64) -> Vec<(Vec3, Vec3)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sphere::icosphere_for_edge;
 
     fn pull_on(doc: &Document, shape: ShapeId, distance: f64) -> Pull {
         let anchor = doc.mesh(shape).unwrap().positions[0];
@@ -387,5 +428,28 @@ mod tests {
         doc.redo();
         assert_eq!(doc.centerlines(s), vec![(target, bent)]);
         assert!(doc.commit_edit(s, 0, bent).is_err());
+    }
+
+    #[test]
+    fn sletting_av_en_del_kan_angres_med_grepene() {
+        let mut doc = Document::new(2.0);
+        let boks = Primitive::Box {
+            size: [40.0, 30.0, 40.0],
+        };
+        let s = doc.add_primitive(boks, [0.0, 15.0, 0.0]).unwrap();
+        assert_eq!(doc.primitive(s), Some(boks));
+        let anchor = doc.mesh(s).unwrap().positions[0];
+        let pull = Pull::straight(anchor, normalize(sub(anchor, [0.0, 15.0, 0.0])), 8.0, 8.0);
+        doc.commit_pull(s, pull).unwrap();
+        let shaped = doc.mesh(s).unwrap().clone();
+
+        doc.remove_shape(s).unwrap();
+        assert!(doc.mesh(s).is_none());
+        assert!(doc.shape_ids().is_empty());
+        assert!(doc.remove_shape(s).is_err());
+        doc.undo();
+        assert_eq!(doc.mesh(s).unwrap().positions, shaped.positions);
+        doc.redo();
+        assert!(doc.mesh(s).is_none());
     }
 }
