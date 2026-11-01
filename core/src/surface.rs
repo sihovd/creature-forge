@@ -250,7 +250,18 @@ pub fn body_mesh(skeleton: &Skeleton, root: SplineId, h: f64) -> Result<TriMesh,
             }
         }
     }
-    let n = [0, 1, 2].map(|a| ((hi[a] - lo[a]) / h).ceil() as usize + 1);
+    let mirror = skeleton.mirror();
+    if mirror {
+        // Rutenettet ligger symmetrisk om x = 0, så hvert rutepunkt har et
+        // speilbilde i et annet rutepunkt.
+        let m = (lo[0].abs().max(hi[0].abs()) / h).ceil();
+        lo[0] = -m * h;
+        hi[0] = m * h;
+    }
+    let mut n = [0, 1, 2].map(|a| ((hi[a] - lo[a]) / h).ceil() as usize + 1);
+    if mirror {
+        n[0] = ((hi[0] - lo[0]) / h).round() as usize + 1;
+    }
     if n[0] * n[1] * n[2] > MAX_GRID_POINTS {
         return Err("Kroppen er for stor for valgt kantlengde".into());
     }
@@ -341,10 +352,195 @@ pub fn body_mesh(skeleton: &Skeleton, root: SplineId, h: f64) -> Result<TriMesh,
             }
         }
     }
+    if mirror {
+        let n0 = grid.n[0];
+        for row in grid.values.chunks_mut(n0) {
+            for i in 0..n0 / 2 {
+                let v = row[i].min(row[n0 - 1 - i]);
+                row[i] = v;
+                row[n0 - 1 - i] = v;
+            }
+        }
+    }
     for v in grid.values.iter_mut() {
         *v = v.min(far);
     }
     Ok(surface_nets(&grid))
+}
+
+impl Tube {
+    /// Signert avstand fra `p` til overflaten rundt denne splinen.
+    fn distance(&self, p: Vec3) -> f64 {
+        let mut best = (f64::INFINITY, 0, 0.0);
+        for (si, w) in self.points.windows(2).enumerate() {
+            let (d, t) = segment_project(p, w[0], w[1]);
+            if d < best.0 {
+                best = (d, si, t);
+            }
+        }
+        let (d, si, t) = best;
+        match &self.field {
+            None => d - self.radius,
+            Some(f) => {
+                let (a, b) = (self.points[si], self.points[si + 1]);
+                f.distance(p, si, t, add(a, scale(sub(b, a), t)))
+            }
+        }
+    }
+}
+
+/// Avstandsfeltet til en kropp i enkeltpunkter, likt feltet i rutenettet.
+pub struct BodyField {
+    tubes: Vec<Tube>,
+    /// Boksen rundt hvert rør, med plass til sammensmeltingen.
+    boxes: Vec<(Vec3, Vec3)>,
+    mirror: bool,
+}
+
+impl BodyField {
+    pub fn new(skeleton: &Skeleton, root: SplineId, h: f64) -> Result<BodyField, String> {
+        let world = skeleton.evaluate()?;
+        let tubes = tubes(&world, skeleton, root, h)?;
+        let boxes = tubes
+            .iter()
+            .map(|t| {
+                let pad = t.radius + blend_width(t.radius);
+                let lo = [0, 1, 2]
+                    .map(|i| t.points.iter().map(|p| p[i]).fold(f64::INFINITY, f64::min) - pad);
+                let hi = [0, 1, 2].map(|i| {
+                    t.points
+                        .iter()
+                        .map(|p| p[i])
+                        .fold(f64::NEG_INFINITY, f64::max)
+                        + pad
+                });
+                (lo, hi)
+            })
+            .collect();
+        Ok(BodyField {
+            tubes,
+            boxes,
+            mirror: skeleton.mirror(),
+        })
+    }
+
+    fn one_side(&self, p: Vec3) -> f64 {
+        let mut v = f64::INFINITY;
+        for (tube, (lo, hi)) in self.tubes.iter().zip(&self.boxes) {
+            // Et rør langt unna endrer ikke det glatte minimumet.
+            let outside = (0..3)
+                .map(|i| (lo[i] - p[i]).max(p[i] - hi[i]).max(0.0))
+                .fold(0.0f64, |a, b| a.hypot(b));
+            if v.is_finite() && outside > v + blend_width(tube.radius) {
+                continue;
+            }
+            let d = tube.distance(p);
+            v = if v.is_finite() {
+                smooth_min(v, d, blend_width(tube.radius))
+            } else {
+                d
+            };
+        }
+        v
+    }
+
+    pub fn value(&self, p: Vec3) -> f64 {
+        let v = self.one_side(p);
+        if self.mirror {
+            v.min(self.one_side([-p[0], p[1], p[2]]))
+        } else {
+            v
+        }
+    }
+
+    fn gradient(&self, p: Vec3, e: f64) -> Vec3 {
+        let d = |k: usize| {
+            let (mut a, mut b) = (p, p);
+            a[k] += e;
+            b[k] -= e;
+            (self.value(a) - self.value(b)) / (2.0 * e)
+        };
+        [d(0), d(1), d(2)]
+    }
+
+    /// Flytter `p` inn på overflaten med noen Newton-steg langs gradienten.
+    /// Hvert steg er begrenset til `max_step`, så punktet ikke hopper.
+    pub fn project(&self, mut p: Vec3, max_step: f64) -> Vec3 {
+        for _ in 0..4 {
+            let f = self.value(p);
+            if !f.is_finite() || f.abs() < max_step * 1e-3 {
+                break;
+            }
+            let g = self.gradient(p, max_step * 0.05);
+            let g2 = dot(g, g);
+            if g2 < 1e-12 {
+                break;
+            }
+            let mut step = scale(g, -f / g2);
+            let l = length(step);
+            if l > max_step {
+                step = scale(step, max_step / l);
+            }
+            p = add(p, step);
+        }
+        p
+    }
+}
+
+/// Flere trekanter i knekkene: kanter der nabotrekantene står i større
+/// vinkel enn `angle_deg` deles, og punktene flyttes inn på overflaten.
+/// Gjentas `levels` ganger, så skarpe kanter får stadig finere trekanter.
+pub fn refine_creases(mesh: &mut TriMesh, field: &BodyField, h: f64, levels: u32, angle_deg: f64) {
+    use crate::refine::{edge_key, split_edges, Edge};
+    use std::collections::{HashMap, HashSet};
+    let limit = angle_deg.to_radians().cos();
+    for level in 0..levels {
+        let normals: Vec<Vec3> = mesh
+            .triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+                crate::mesh::normalize(crate::mesh::cross(sub(b, a), sub(c, a)))
+            })
+            .collect();
+        let mut faces: HashMap<Edge, Vec<usize>> = HashMap::new();
+        for (f, t) in mesh.triangles.iter().enumerate() {
+            for k in 0..3 {
+                faces
+                    .entry(edge_key(t[k], t[(k + 1) % 3]))
+                    .or_default()
+                    .push(f);
+            }
+        }
+        // Kanter kortere enn dette er fine nok for dette nivået.
+        let min_len = h / 2f64.powi(level as i32 + 2);
+        let edges: HashSet<Edge> = faces
+            .iter()
+            .filter(|(e, f)| {
+                f.len() == 2
+                    && dot(normals[f[0]], normals[f[1]]) < limit
+                    && length(sub(
+                        mesh.positions[e.0 as usize],
+                        mesh.positions[e.1 as usize],
+                    )) > min_len
+            })
+            .map(|(e, _)| *e)
+            .collect();
+        if edges.is_empty() {
+            break;
+        }
+        let touched: HashSet<u32> = edges.iter().flat_map(|e| [e.0, e.1]).collect();
+        let step = h / 2f64.powi(level as i32 + 1);
+        split_edges(mesh, &edges, |a, b| {
+            field.project(scale(add(a, b), 0.5), step)
+        });
+        let mut touched: Vec<u32> = touched.into_iter().collect();
+        touched.sort_unstable();
+        for i in touched {
+            let p = mesh.positions[i as usize];
+            mesh.positions[i as usize] = field.project(p, step);
+        }
+    }
 }
 
 /// Overflaten der feltet skifter fortegn. Ett punkt per rute som krysses,
@@ -671,5 +867,85 @@ mod tests {
         roots.sort_unstable();
         roots.dedup();
         roots.len()
+    }
+
+    /// Hvor nær meshen kommer hjørnene i et rektangulært tverrsnitt 20 × 10 mm
+    /// midt på staven (2 er et helt skarpt hjørne).
+    fn corner_reach(m: &TriMesh) -> f64 {
+        m.positions
+            .iter()
+            .filter(|p| (20.0..40.0).contains(&p[0]))
+            .map(|p| {
+                (p[1].abs() / 10.0 + p[2].abs() / 5.0).max(p[2].abs() / 10.0 + p[1].abs() / 5.0)
+            })
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn knekker_faar_flere_trekanter_og_skarpere_kanter() {
+        let (sk, id) = rod(vec![E::AddProfile {
+            spline: 1,
+            at: 0.5,
+            from: None,
+        }]);
+        let mut sk = sk;
+        sk.apply(&E::SetProfile {
+            spline: id,
+            station: 0,
+            profile: crate::profile::Profile::rectangle(1.0, 0.5),
+        })
+        .unwrap();
+        let h = 2.0;
+        let plain = body_mesh(&sk, id, h).unwrap();
+        let mut fine = plain.clone();
+        let field = BodyField::new(&sk, id, h).unwrap();
+        refine_creases(&mut fine, &field, h, 2, 25.0);
+        assert!(fine.is_closed_manifold());
+        assert!(fine.triangles.len() > plain.triangles.len());
+        assert!(
+            corner_reach(&fine) > corner_reach(&plain) + 0.02,
+            "{} {}",
+            corner_reach(&fine),
+            corner_reach(&plain)
+        );
+        // Glatte flater får nesten ingen nye trekanter.
+        let (ball, b) = sphere(20.0);
+        let mut m = body_mesh(&ball, b, h).unwrap();
+        let before = m.triangles.len();
+        let field = BodyField::new(&ball, b, h).unwrap();
+        refine_creases(&mut m, &field, h, 2, 25.0);
+        assert!(m.triangles.len() < before + before / 50);
+    }
+
+    #[test]
+    fn speilmodus_speiler_kroppen_om_x_null() {
+        let mut sk = Skeleton::new();
+        let id = sk
+            .apply(&E::AddRoot {
+                start: [20.0, 0.0, 0.0],
+                direction: [0.0, 1.0, 0.0],
+                length: 30.0,
+                thickness: 5.0,
+            })
+            .unwrap()
+            .unwrap();
+        let one = body_mesh(&sk, id, 1.5).unwrap();
+        sk.apply(&E::SetMirror { mirror: true }).unwrap();
+        let both = body_mesh(&sk, id, 1.5).unwrap();
+        assert_eq!(components(&one), 1);
+        assert_eq!(components(&both), 2);
+        assert!(
+            (both.signed_volume() - 2.0 * one.signed_volume()).abs() < 0.02 * both.signed_volume()
+        );
+        let min_x = both
+            .positions
+            .iter()
+            .map(|p| p[0])
+            .fold(f64::INFINITY, f64::min);
+        assert!((min_x + 25.0).abs() < 1.0, "{min_x}");
+        // Feltet i enkeltpunkter følger speilingen.
+        let field = BodyField::new(&sk, id, 1.5).unwrap();
+        assert!(field.value([-20.0, 15.0, 0.0]) < -4.0);
+        assert!((field.value([-25.0, 15.0, 0.0])).abs() < 0.1);
     }
 }

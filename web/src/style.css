@@ -272,11 +272,8 @@ body {
 /* Lagliste, verktøyknapper og aksekors (trinn 2). */
 :root { --accent: #6a4fd8; --accent-soft: #efeafe; --teal: #1fa39b; }
 
-.modes-bar button.tool { background: transparent; color: var(--text); border: 1px solid var(--line); }
-.modes-bar button.tool[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-
-.workspace { grid-template-columns: 240px 1fr 260px; }
-body.layers-closed .workspace { grid-template-columns: 1fr 260px; }
+.workspace { grid-template-columns: 68px 240px 1fr 260px; }
+body.layers-closed .workspace { grid-template-columns: 68px 1fr 260px; }
 body.layers-closed .layers { display: none; }
 
 .layers {
@@ -372,14 +369,14 @@ fieldset.sections:disabled .profile-editor { pointer-events: none; opacity: 0.6;
 .gizmo-bar button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; cursor: pointer; }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 200px 1fr 240px; }
+  .workspace { grid-template-columns: 68px 200px 1fr 240px; }
 }
 
 @media (max-width: 640px) {
   .topbar { flex-wrap: wrap; }
   .tools { width: auto; }
-  .workspace, body.layers-closed .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr auto; position: relative; }
-  .layers { position: absolute; z-index: 3; left: 0; top: 0; bottom: 0; width: min(80vw, 280px); box-shadow: 4px 0 16px rgb(0 0 0 / 0.12); }
+  .workspace, body.layers-closed .workspace { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; position: relative; }
+  .layers { position: absolute; z-index: 3; left: 0; top: 58px; bottom: 0; width: min(80vw, 280px); box-shadow: 4px 0 16px rgb(0 0 0 / 0.12); }
   .layer-tree .row { min-height: 42px; }
   .inspector-head h1 { font-size: 16px; }
   .inspector-head .path { margin-bottom: 6px; }
@@ -477,3 +474,61 @@ body.contour-editing .empty-hint { display: none; }
 .registry .tile-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
 .panel .registry-help { margin: 0 0 8px; }
 .panel input.name.wide { width: 100%; }
+
+/* Verktøylinjen til venstre for laglisten. */
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  min-height: 0;
+}
+.toolbar button.tool {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 2px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.15;
+  cursor: pointer;
+}
+.toolbar button.tool svg { width: 24px; height: 24px; fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.toolbar button.tool:hover { background: #f3f1fa; }
+.toolbar button.tool[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.toolbar button.tool[aria-pressed='true'] svg { fill: #fff; }
+.toolbar button.tool:disabled { opacity: 0.4; cursor: default; background: transparent; }
+#tool-mirror[aria-pressed='true'] svg { stroke: var(--teal); }
+
+@media (max-width: 640px) {
+  .toolbar { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px 6px; overflow-x: auto; overflow-y: hidden; }
+  .toolbar button.tool { width: auto; min-width: 54px; flex: none; font-size: 10px; padding: 4px; }
+  .toolbar button.tool svg { width: 20px; height: 20px; }
+}
+
+.part-list { display: grid; gap: 8px; margin-bottom: 8px; }
+.part-row { padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.part-row strong { display: block; margin-bottom: 6px; font-size: 14px; }
+.part-row label { margin-bottom: 4px; }
+.part-row button { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font: inherit; cursor: pointer; }
+.panel select#part-source { flex: 1; min-width: 0; min-height: 32px; }
+
+dialog.settings { width: min(92vw, 380px); padding: 18px; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.18); }
+dialog.settings::backdrop { background: rgb(0 0 0 / 0.2); }
+dialog.settings h2 { margin: 0 0 12px; font-size: 18px; }
+dialog.settings fieldset { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+dialog.settings legend { padding: 0 4px; font-weight: 600; }
+dialog.settings label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; font-size: 14px; }
+dialog.settings input, dialog.settings select { min-height: 32px; font: inherit; }
+dialog.settings input { width: 64px; text-align: right; }
+dialog.settings .help { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
+dialog.settings .row.end { display: flex; justify-content: flex-end; }
+dialog.settings button { min-height: 36px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-text); font: inherit; cursor: pointer; }

@@ -13,7 +13,7 @@
 use crate::mesh::{length, normalize, sub, TriMesh, Vec3};
 use crate::pull::{apply_pull, Pull};
 use crate::skeleton::{bezier_point, Skeleton, SkeletonEdit, SplineId};
-use crate::surface::body_mesh;
+use crate::surface::{body_mesh, refine_creases, BodyField};
 use std::collections::HashMap;
 
 /// En kropp har samme id som rotsplinen sin.
@@ -50,22 +50,7 @@ impl BoundPull {
     /// Knytter et uttrekk til splinen i kroppen `root` som ligger nærmest
     /// grepets overflate.
     pub fn bind(skeleton: &Skeleton, root: SplineId, pull: &Pull) -> Result<BoundPull, String> {
-        let mut best: Option<(f64, SplineId, f64)> = None;
-        for id in skeleton.descendants(root) {
-            let w = skeleton.world_spline(id)?;
-            let thickness = skeleton.spline(id).map_or(0.0, |s| s.thickness);
-            let n = w.segments.len() * BIND_POINTS_PER_SEGMENT;
-            for i in 0..=n {
-                let u = i as f64 / n as f64;
-                let k = (i / BIND_POINTS_PER_SEGMENT).min(w.segments.len() - 1);
-                let t = (i - k * BIND_POINTS_PER_SEGMENT) as f64 / BIND_POINTS_PER_SEGMENT as f64;
-                let d = length(sub(pull.anchor, bezier_point(&w.segments[k], t))) - thickness;
-                if best.is_none_or(|b| d < b.0) {
-                    best = Some((d, id, u));
-                }
-            }
-        }
-        let (_, spline, approx) = best.ok_or("Kroppen har ingen spline")?;
+        let (_, spline, approx) = nearest(skeleton, root, pull.anchor)?;
         // Andelen er bare et referansepunkt; buelengdeandelen gjøres eksakt
         // av rammen selv, så samme andel gir samme ramme ved avspilling.
         let at = approx.clamp(0.0, 1.0);
@@ -97,6 +82,42 @@ impl BoundPull {
             radius: self.radius,
         })
     }
+}
+
+/// Nærmeste spline i kroppen `root` til overflaten ved `p`: avstanden,
+/// splinen og andelen langs den.
+fn nearest(skeleton: &Skeleton, root: SplineId, p: Vec3) -> Result<(f64, SplineId, f64), String> {
+    let mut best: Option<(f64, SplineId, f64)> = None;
+    for id in skeleton.descendants(root) {
+        let w = skeleton.world_spline(id)?;
+        let thickness = skeleton.spline(id).map_or(0.0, |s| s.thickness);
+        let n = w.segments.len() * BIND_POINTS_PER_SEGMENT;
+        for i in 0..=n {
+            let u = i as f64 / n as f64;
+            let k = (i / BIND_POINTS_PER_SEGMENT).min(w.segments.len() - 1);
+            let t = (i - k * BIND_POINTS_PER_SEGMENT) as f64 / BIND_POINTS_PER_SEGMENT as f64;
+            let d = length(sub(p, bezier_point(&w.segments[k], t))) - thickness;
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, id, u));
+            }
+        }
+    }
+    best.ok_or_else(|| "Kroppen har ingen spline".into())
+}
+
+/// Speilbildet av et uttrekk om x = 0 når speilmodus er på. Et uttrekk på
+/// selve speilplanet speiles ikke, så det ikke trekkes ut to ganger.
+fn mirrored_pull(skeleton: &Skeleton, p: &Pull) -> Option<Pull> {
+    if !skeleton.mirror() || p.anchor[0].abs() < p.radius * 0.5 {
+        return None;
+    }
+    let m = |v: Vec3| [-v[0], v[1], v[2]];
+    Some(Pull {
+        anchor: m(p.anchor),
+        normal: m(p.normal),
+        tip: m(p.tip),
+        radius: p.radius,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -209,7 +230,7 @@ impl Document {
         let mut meshes = Vec::new();
         for root in changed_roots(&self.skeleton, &next) {
             let mesh = if next.spline(root).is_some() {
-                Some(self.shape_mesh(&next, root, h, self.history.len())?)
+                Some(self.shape_mesh(&next, root, h, self.history.len(), false)?)
             } else {
                 None
             };
@@ -246,10 +267,22 @@ impl Document {
         if self.skeleton.is_locked(shape) {
             return Err("Laget er låst".into());
         }
+        // Med speiling knyttes uttrekket til siden der skjelettet er, så det
+        // følger splinene på begge sider.
+        let mut pull = pull;
+        if let Some(m) = mirrored_pull(&self.skeleton, &pull) {
+            let d = |p: &Pull| nearest(&self.skeleton, shape, p.anchor).map(|n| n.0);
+            if d(&m)? < d(&pull)? {
+                pull = m;
+            }
+        }
         let bound = BoundPull::bind(&self.skeleton, shape, &pull)?;
         // Bruk uttrekket slik det spilles av, så angre og gjør om gir samme mesh.
         let resolved = bound.resolve(&self.skeleton).ok_or("Ukjent form")?;
-        let mesh = self.preview_pull(shape, &resolved)?;
+        let mut mesh = self.preview_pull(shape, &resolved)?;
+        if let Some(m) = mirrored_pull(&self.skeleton, &resolved) {
+            mesh = apply_pull(&mesh, &m, self.target_edge)?;
+        }
         let pull = bound;
         self.meshes.insert(shape, mesh);
         self.history.push(Operation::Pull { shape, pull });
@@ -282,9 +315,13 @@ impl Document {
             let current = self.current_skeleton();
             let old = std::mem::replace(&mut self.skeleton, current);
             let _ = self.rebuild_changed(&old);
-        } else if let Ok(m) =
-            self.shape_mesh(&self.skeleton, shape, self.target_edge, self.history.len())
-        {
+        } else if let Ok(m) = self.shape_mesh(
+            &self.skeleton,
+            shape,
+            self.target_edge,
+            self.history.len(),
+            true,
+        ) {
             self.meshes.insert(shape, m);
         }
         self.revision += 1;
@@ -350,8 +387,30 @@ impl Document {
         root: ShapeId,
         h: f64,
         upto: usize,
+        refine: bool,
     ) -> Result<TriMesh, String> {
         let mut mesh = body_mesh(skeleton, root, h)?;
+        let settings = skeleton.settings();
+        if refine && settings.crease_detail > 0 {
+            let field = BodyField::new(skeleton, root, h)?;
+            refine_creases(
+                &mut mesh,
+                &field,
+                h,
+                settings.crease_detail,
+                settings.crease_angle,
+            );
+        }
+        let world = skeleton.evaluate()?;
+        let mut parts = crate::parts::body_parts(skeleton, &world, root);
+        if skeleton.mirror() {
+            parts = {
+                let mut both = parts.clone();
+                crate::parts::append(&mut both, &crate::parts::mirrored(&parts));
+                both
+            };
+        }
+        crate::parts::append(&mut mesh, &parts);
         let history = self.history[..upto].iter().filter_map(|op| match op {
             Operation::Pull { shape, pull } => Some((shape, pull)),
             _ => None,
@@ -360,6 +419,9 @@ impl Document {
             if *shape == root {
                 if let Some(p) = pull.resolve(skeleton) {
                     mesh = apply_pull(&mesh, &p, self.target_edge)?;
+                    if let Some(m) = mirrored_pull(skeleton, &p) {
+                        mesh = apply_pull(&mesh, &m, self.target_edge)?;
+                    }
                 }
             }
         }
@@ -371,7 +433,8 @@ impl Document {
         let skeleton = self.skeleton.clone();
         for root in changed_roots(old, &skeleton) {
             if skeleton.spline(root).is_some() {
-                let m = self.shape_mesh(&skeleton, root, self.target_edge, self.history.len())?;
+                let m =
+                    self.shape_mesh(&skeleton, root, self.target_edge, self.history.len(), true)?;
                 self.meshes.insert(root, m);
             } else {
                 self.meshes.remove(&root);
@@ -402,7 +465,10 @@ struct ProjectFile {
 /// Grovere rutenett under drag, så forhåndsvisningen holder følge med pekeren.
 const PREVIEW_EDGE_FACTOR: f64 = 2.0;
 
-/// Røttene der hierarkiet er nytt, fjernet eller endret.
+/// Røttene der hierarkiet er nytt, fjernet eller endret. En kropp er også
+/// endret når en spline i den flytter seg fordi en annen kropp endres (en
+/// ende koblet dit), og alle er endret når noe felles endres (mastere,
+/// speiling, mesh-deler).
 fn changed_roots(old: &Skeleton, new: &Skeleton) -> Vec<SplineId> {
     let roots = |s: &Skeleton| -> Vec<SplineId> {
         s.ids()
@@ -410,17 +476,33 @@ fn changed_roots(old: &Skeleton, new: &Skeleton) -> Vec<SplineId> {
             .filter(|id| s.spline(*id).is_some_and(|sp| sp.attachment.is_none()))
             .collect()
     };
-    let body = |s: &Skeleton, root: SplineId| -> Vec<(SplineId, crate::skeleton::Spline)> {
+    let (wold, wnew) = (
+        old.evaluate().unwrap_or_default(),
+        new.evaluate().unwrap_or_default(),
+    );
+    type Body = Vec<(
+        SplineId,
+        crate::skeleton::Spline,
+        Option<Vec<crate::skeleton::Anchor>>,
+    )>;
+    let body = |s: &Skeleton,
+                w: &std::collections::BTreeMap<SplineId, crate::skeleton::WorldSpline>,
+                root: SplineId|
+     -> Body {
         s.descendants(root)
             .into_iter()
-            .filter_map(|id| s.spline(id).map(|sp| (id, sp.clone())))
+            .filter_map(|id| {
+                s.spline(id)
+                    .map(|sp| (id, sp.clone(), w.get(&id).map(|x| x.anchors.clone())))
+            })
             .collect()
     };
+    let shared = old.shared_differs(new);
     let mut out: Vec<SplineId> = roots(old);
     out.extend(roots(new));
     out.sort_unstable();
     out.dedup();
-    out.retain(|r| body(old, *r) != body(new, *r));
+    out.retain(|r| shared || body(old, &wold, *r) != body(new, &wnew, *r));
     out
 }
 
@@ -830,5 +912,152 @@ mod tests {
                 locked: false
             })
             .is_err());
+    }
+
+    #[test]
+    fn mesh_deler_settes_inn_paa_splinen_og_kan_importeres() {
+        use crate::skeleton::{Part, PartSource};
+        let mut doc = Document::new(2.0);
+        let id = doc
+            .commit_skeleton(&E::AddRoot {
+                start: [0.0; 3],
+                direction: [0.0, 1.0, 0.0],
+                length: 40.0,
+                thickness: 6.0,
+            })
+            .unwrap()
+            .unwrap();
+        let plain = doc.mesh(id).unwrap().triangles.len();
+        let horn = Part {
+            source: PartSource::Builtin {
+                name: "Horn".into(),
+            },
+            at: 0.5,
+            size: 15.0,
+            rotation: 0.0,
+            outward: true,
+        };
+        doc.commit_skeleton(&E::AddPart {
+            spline: id,
+            part: horn.clone(),
+            toward: Some([0.0, 0.0, 1.0]),
+        })
+        .unwrap();
+        let m = doc.mesh(id).unwrap();
+        assert!(m.triangles.len() > plain);
+        // Hornet stikker ut fra overflaten, mot +z.
+        let reach = m.positions.iter().map(|p| p[2]).fold(0.0, f64::max);
+        assert!(reach > 6.0 + 10.0, "{reach}");
+        // Importert mesh: et tetraeder i registeret, brukt på splinen.
+        doc.commit_skeleton(&E::ImportPart {
+            name: "Tetra".into(),
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        })
+        .unwrap();
+        let lib = doc.skeleton().library();
+        assert_eq!(lib.parts.len(), crate::parts::BUILTIN.len() + 1);
+        let stored = lib.parts.last().unwrap().source.clone();
+        doc.commit_skeleton(&E::AddPart {
+            spline: id,
+            part: Part {
+                source: stored.clone(),
+                ..horn.clone()
+            },
+            toward: None,
+        })
+        .unwrap();
+        assert!(doc
+            .commit_skeleton(&E::AddPart {
+                spline: id,
+                part: Part {
+                    source: PartSource::Builtin {
+                        name: "Vinge".into()
+                    },
+                    ..horn
+                },
+                toward: None,
+            })
+            .is_err());
+        // Lagres i prosjektfilen.
+        let opened = Document::open_project(&doc.to_project_json(), 2.0).unwrap();
+        assert_eq!(opened.skeleton().spline(id).unwrap().parts.len(), 2);
+        // Fjernes meshen fra registeret, forsvinner delene som bruker den.
+        let PartSource::Stored { id: mesh_id } = stored else {
+            panic!()
+        };
+        doc.commit_skeleton(&E::RemovePartMesh { id: mesh_id })
+            .unwrap();
+        assert_eq!(doc.skeleton().spline(id).unwrap().parts.len(), 1);
+    }
+
+    #[test]
+    fn speilmodus_speiler_uttrekk_og_kan_angres() {
+        let mut doc = Document::new(2.0);
+        let id = doc
+            .commit_skeleton(&E::AddRoot {
+                start: [15.0, 0.0, 0.0],
+                direction: [0.0, 1.0, 0.0],
+                length: 20.0,
+                thickness: 6.0,
+            })
+            .unwrap()
+            .unwrap();
+        let one = doc.mesh(id).unwrap().signed_volume();
+        doc.commit_skeleton(&E::SetMirror { mirror: true }).unwrap();
+        let two = doc.mesh(id).unwrap().signed_volume();
+        assert!((two - 2.0 * one).abs() < 0.03 * two);
+        // Et uttrekk på originalsiden gir et likt uttrekk på speilsiden.
+        let pull = Pull::straight([21.0, 10.0, 0.0], [1.0, 0.0, 0.0], 5.0, 4.0);
+        doc.commit_pull(id, pull).unwrap();
+        let m = doc.mesh(id).unwrap();
+        let max_x = m.positions.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
+        let min_x = m.positions.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
+        assert!(max_x > 23.0 && min_x < -23.0, "{min_x} {max_x}");
+        assert!((max_x + min_x).abs() < 0.5, "{min_x} {max_x}");
+        doc.undo();
+        doc.undo();
+        assert!(!doc.skeleton().mirror());
+        assert!((doc.mesh(id).unwrap().signed_volume() - one).abs() < 1e-9);
+    }
+
+    #[test]
+    fn konturen_kan_flyttes_over_paa_en_annen_spline() {
+        let mut doc = Document::new(2.0);
+        let root = doc
+            .commit_skeleton(&E::AddRoot {
+                start: [0.0; 3],
+                direction: [0.0, 1.0, 0.0],
+                length: 40.0,
+                thickness: 5.0,
+            })
+            .unwrap()
+            .unwrap();
+        let child = doc
+            .commit_skeleton(&E::AddChild {
+                parent: root,
+                at: 0.5,
+                direction: [1.0, 0.0, 0.0],
+                length: 20.0,
+                thickness: 3.0,
+                orientation: Orientation::FollowParent,
+            })
+            .unwrap()
+            .unwrap();
+        doc.commit_skeleton(&E::AddProfile {
+            spline: root,
+            at: 0.2,
+            from: None,
+        })
+        .unwrap();
+        doc.commit_skeleton(&E::MoveProfile {
+            spline: root,
+            station: 0,
+            to: child,
+            at: 0.6,
+        })
+        .unwrap();
+        assert!(doc.skeleton().spline(root).unwrap().profiles.is_empty());
+        assert_eq!(doc.skeleton().spline(child).unwrap().profiles[0].at, 0.6);
     }
 }

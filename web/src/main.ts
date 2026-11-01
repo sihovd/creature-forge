@@ -4,8 +4,9 @@ import { ContourMode } from './contour-mode';
 import { ContourRegistry } from './contour-registry';
 import { GeometryClient } from './geometry-client';
 import * as THREE from 'three';
-import type { Command, GeometryResult, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
+import type { Command, GeometryResult, Library, PullParams, SkeletonEdit, SplineView, Vec3 } from './protocol';
 import { LayerPanel, splineName } from './layer-panel';
+import { PartsPanel } from './parts-panel';
 import { ProfilePanel } from './profile-panel';
 import { PullTool } from './pull-tool';
 import { polylineFraction } from './skeleton-math';
@@ -50,6 +51,13 @@ const addBranch = $<HTMLButtonElement>('#add-branch');
 const anchorKind = $<HTMLButtonElement>('#anchor-kind');
 const removeSpline = $<HTMLButtonElement>('#remove-spline');
 const thicknessInput = $<HTMLInputElement>('#thickness');
+const toolBranch = $<HTMLButtonElement>('#tool-branch');
+const toolContour = $<HTMLButtonElement>('#tool-contour');
+const toolPart = $<HTMLButtonElement>('#tool-part');
+const toolMirror = $<HTMLButtonElement>('#tool-mirror');
+const settingsDialog = $<HTMLDialogElement>('#settings');
+const creaseDetail = $<HTMLSelectElement>('#crease-detail');
+const creaseAngle = $<HTMLInputElement>('#crease-angle');
 
 // Arbeidsrommet starter alltid tomt; brukeren legger selv til første form.
 const viewport = new Viewport(container);
@@ -76,13 +84,18 @@ function apply(result: GeometryResult) {
     for (const s of result.shapes) viewport.setShapeMesh(s.shape, s.mesh);
     return;
   }
+  skeleton.mirror = result.library.mirror;
   skeleton.set(result.skeleton);
   if (registry) registry.entries = result.registry;
+  if (parts) parts.library = result.library;
+  syncLibrary(result.library);
   if (result.created !== null) skeleton.select({ spline: result.created, index: null });
   syncLayers();
   updateSkeletonPanel();
   container.dataset.profiles = String(skeleton.splines.reduce((n, s) => n + s.profiles.length, 0));
   container.dataset.splines = String(skeleton.count);
+  container.dataset.parts = String(skeleton.splines.reduce((n, s) => n + s.parts.length, 0));
+  container.dataset.ends = String(skeleton.splines.filter((s) => s.end_parent !== null).length);
   let triangles = 0;
   for (const s of result.shapes) {
     triangles += viewport.setShapeMesh(s.shape, s.mesh);
@@ -130,6 +143,15 @@ async function pumpPreview() {
 }
 
 
+/** Speilknappen og meshinnstillingene slik dokumentet har dem. */
+function syncLibrary(library: Library) {
+  toolMirror.setAttribute('aria-pressed', String(library.mirror));
+  container.dataset.mirror = library.mirror ? 'on' : '';
+  creaseDetail.value = String(library.settings.crease_detail);
+  if (document.activeElement !== creaseAngle) creaseAngle.value = String(library.settings.crease_angle);
+  container.dataset.creaseDetail = String(library.settings.crease_detail);
+}
+
 /** Skjulte og låste lag i visningen, og laglisten. */
 function syncLayers() {
   const roots = skeleton.splines.filter((s) => s.parent === null);
@@ -155,6 +177,10 @@ function updateSkeletonPanel() {
   profiles?.update();
   contourMode?.update();
   registry?.update();
+  parts?.update();
+  toolBranch.disabled = addBranch.disabled;
+  toolContour.disabled = !spline || !!sel?.layer || !!spline.locked;
+  toolPart.disabled = $<HTMLButtonElement>('#add-part').disabled || !!spline?.locked;
   editContour.disabled = !(sel?.station != null && spline && !spline.locked);
   updateInspector();
   layers?.render();
@@ -326,6 +352,32 @@ const registry: ContourRegistry = new ContourRegistry(skeleton, profiles, {
   commit: (edit, what) => editSkeleton(edit, what),
   status: (text) => (status.textContent = text),
 });
+
+const parts: PartsPanel = new PartsPanel(skeleton, {
+  commit: (edit, what) => editSkeleton(edit, what),
+  status: (text) => (status.textContent = text),
+});
+
+// Verktøylinjen: snarveier til knappene i inspektøren, speilmodus og innstillinger.
+toolBranch.addEventListener('click', () => addBranch.click());
+toolContour.addEventListener('click', () => $<HTMLButtonElement>('#add-profile').click());
+toolPart.addEventListener('click', () => $<HTMLButtonElement>('#add-part').click());
+toolMirror.addEventListener('click', () => {
+  const on = toolMirror.getAttribute('aria-pressed') !== 'true';
+  editSkeleton({ kind: 'setMirror', mirror: on }, on ? 'Speilmodus på (om x = 0)' : 'Speilmodus av');
+});
+$<HTMLButtonElement>('#open-settings').addEventListener('click', () => settingsDialog.showModal());
+function commitMeshSettings() {
+  const angle = Math.min(Math.max(Number(creaseAngle.value.replace(',', '.')) || 25, 1), 90);
+  creaseAngle.value = String(angle);
+  const level = Number(creaseDetail.value);
+  editSkeleton(
+    { kind: 'setMeshSettings', settings: { crease_detail: level, crease_angle: angle } },
+    `Flere trekanter i knekker: ${creaseDetail.selectedOptions[0].textContent} (fra ${angle}°)`,
+  );
+}
+creaseDetail.addEventListener('change', commitMeshSettings);
+creaseAngle.addEventListener('change', commitMeshSettings);
 
 addSpline.addEventListener('click', () => {
   const rect = container.getBoundingClientRect();
@@ -667,6 +719,7 @@ function splineItems(s: SplineView, at: number): MenuItem[] {
     { label: 'Ny gren her', action: () => addBranchAt(s, at) },
     { label: 'Ny kontur her', action: () => profiles.addAt(s, at) },
     { label: 'Lim inn kontur her', action: () => profiles.pasteAt(s, at), disabled: !profiles.clip },
+    { label: `Sett inn mesh-del her (${partName()})`, action: () => parts.insert(s, at, at < 0.999), disabled: !parts.current() },
     ...(near >= 0
       ? [
           { label: `Rediger kontur ${near + 1}`, action: () => editContourAt(s.id, near) },
@@ -683,6 +736,12 @@ function splineItems(s: SplineView, at: number): MenuItem[] {
   ];
 }
 
+/** Navnet på delen som er valgt i delregisteret. */
+const partName = () => {
+  const src = parts.current();
+  return parts.library.parts.find((p) => JSON.stringify(p.source) === JSON.stringify(src))?.name ?? 'ingen valgt';
+};
+
 const historyItems = (): MenuItem[] => [
   { label: 'Angre', action: undo, disabled: undoButton.disabled, hint: 'Ctrl+Z' },
   { label: 'Gjør om', action: redo, disabled: redoButton.disabled, hint: 'Ctrl+Shift+Z' },
@@ -698,6 +757,9 @@ function openMenu(x: number, y: number) {
     select(s.id, pick.index);
     return menu.show(x, y, `${tip ? 'Tuppen' : `Punkt ${pick.index + 1}`} på spline ${s.id}`, [
       { label: a.kind === 'corner' ? 'Gjør til mykt punkt' : 'Gjør til hjørnepunkt', action: () => anchorKind.click() },
+      ...(tip && s.end_parent !== null
+        ? [{ label: 'Løsne enden', action: () => editSkeleton({ kind: 'detachEnd', spline: s.id }, 'Løsnet enden') }]
+        : []),
       ...(tip
         ? []
         : [{ label: 'Bøy herfra', action: () => (status.textContent = 'Grip tuppen og hold Alt + Shift for å bøye fra dette punktet.') }]),
@@ -747,6 +809,7 @@ function openMenu(x: number, y: number) {
         { label: 'Ny gren ut herfra', action: () => addBranchAt(s, near.at, out) },
         { label: 'Ny kontur her', action: () => profiles.addAt(s, near.at) },
         { label: 'Lim inn kontur her', action: () => profiles.pasteAt(s, near.at), disabled: !profiles.clip },
+        { label: `Sett inn mesh-del her (${partName()})`, action: () => parts.insert(s, near.at, true, arr(out)), disabled: !parts.current() },
         { label: s.flat_end ? 'Avrundet ende' : 'Flat ende', action: () => editSkeleton({ kind: 'setFlatEnd', spline: s.id, flat: !s.flat_end }, s.flat_end ? 'Avrundet ende' : 'Flat ende') },
         null,
         ...historyItems(),
@@ -788,7 +851,7 @@ declare global {
       ringScreen(spline: number, station: number, i: number): { x: number; y: number } | null;
       cameraPosition(): Vec3;
       /** Forelder, feste og orientering. */
-      splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number } | null;
+      splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number; endParent: number | null; endAt: number; parts: number } | null;
     };
   }
 }
@@ -849,7 +912,7 @@ window.creatureForgeTest = {
   },
   splineInfo(spline) {
     const s = skeleton.spline(spline);
-    return s ? { parent: s.parent, at: s.at, orientation: s.orientation, layer: s.layer } : null;
+    return s ? { parent: s.parent, at: s.at, orientation: s.orientation, layer: s.layer, endParent: s.end_parent, endAt: s.end_at, parts: s.parts.length } : null;
   },
   splineAnchorsWorld(spline) {
     return skeleton.spline(spline)?.anchors.map((a) => a.position) ?? null;

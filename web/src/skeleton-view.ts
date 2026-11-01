@@ -64,7 +64,11 @@ export class SkeletonView {
     route: new THREE.LineBasicMaterial({ color: ROUTE_COLOR, depthTest: false }),
     routeOption: new THREE.LineDashedMaterial({ color: ROUTE_COLOR, dashSize: 2, gapSize: 1.5, depthTest: false }),
     routeMarker: new THREE.MeshBasicMaterial({ color: ROUTE_COLOR, depthTest: false }),
+    mirror: new THREE.LineDashedMaterial({ color: LINE_COLOR, dashSize: 1.5, gapSize: 1.5, depthTest: false, transparent: true, opacity: 0.35 }),
+    part: new THREE.LineBasicMaterial({ color: RING_COLOR, depthTest: false }),
   };
+  /** Speilmodus: splinene vises svakt speilet om x = 0. */
+  mirror = false;
   private snapMarker: THREE.Mesh;
   private route = new THREE.Group();
   private bendRing: THREE.Mesh;
@@ -147,6 +151,16 @@ export class SkeletonView {
     };
     for (const s of this.splines) {
       if (s.hidden) continue;
+      if (this.mirror) {
+        const ghost = new THREE.Line(new THREE.BufferGeometry().setFromPoints(s.points.map((p) => new THREE.Vector3(-p[0], p[1], p[2]))), this.materials.mirror);
+        ghost.computeLineDistances();
+        add(ghost);
+      }
+      // Mesh-delene vises som en strek fra foten i delens retning.
+      for (const part of s.parts) {
+        const base = v3(part.base);
+        add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([base, base.clone().addScaledVector(v3(part.axis), part.size)]), this.materials.part));
+      }
       const curve = new THREE.BufferGeometry().setFromPoints(s.points.map(v3));
       if (s.locked) {
         // Et låst lag vises som referanse uten punkter som kan gripes.

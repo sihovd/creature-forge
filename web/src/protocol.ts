@@ -31,6 +31,16 @@ export type SkeletonEdit =
   | { kind: 'extend'; spline: number; delta: number }
   | { kind: 'bend'; spline: number; from: number; direction: Vec3; angle: number; radius: number }
   | { kind: 'reattach'; spline: number; at: number; parent?: number }
+  | { kind: 'attachEnd'; spline: number; target: number; at: number }
+  | { kind: 'detachEnd'; spline: number }
+  | { kind: 'moveProfile'; spline: number; station: number; to: number; at: number }
+  | { kind: 'addPart'; spline: number; part: Part; toward?: Vec3 }
+  | { kind: 'setPart'; spline: number; index: number; part: Part }
+  | { kind: 'removePart'; spline: number; index: number }
+  | { kind: 'importPart'; name: string; positions: Vec3[]; triangles: [number, number, number][] }
+  | { kind: 'removePartMesh'; id: number }
+  | { kind: 'setMirror'; mirror: boolean }
+  | { kind: 'setMeshSettings'; settings: MeshSettings }
   | { kind: 'setOrientation'; spline: number; orientation: Orientation }
   | { kind: 'translate'; spline: number; delta: Vec3 }
   | { kind: 'setThickness'; spline: number; thickness: number }
@@ -54,6 +64,40 @@ export type SkeletonEdit =
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
 export type AnchorKind = 'smooth' | 'corner';
+
+/** Hvor en mesh-del kommer fra: en innebygd form eller en importert mesh. */
+export type PartSource = { kind: 'builtin'; name: string } | { kind: 'stored'; id: number };
+
+/** En mesh-del på en spline: plass, høyde i mm, retning rundt kurven og om den står ut fra overflaten. */
+export interface Part {
+  source: PartSource;
+  at: number;
+  size: number;
+  rotation: number;
+  outward: boolean;
+}
+
+export interface PartView extends Part {
+  name: string;
+  /** Foten og høyderetningen i verdenskoordinater. */
+  base: Vec3;
+  axis: Vec3;
+}
+
+/** Innstillinger → Mesh: flere trekanter i knekker. */
+export interface MeshSettings {
+  /** 0 = av, 1–3 = hvor mange ganger kantene i knekkene deles. */
+  crease_detail: number;
+  /** Vinkel i grader mellom nabotrekanter der en knekk begynner. */
+  crease_angle: number;
+}
+
+/** Delregisteret, speilingen og meshinnstillingene. */
+export interface Library {
+  parts: { source: PartSource; name: string }[];
+  mirror: boolean;
+  settings: MeshSettings;
+}
 
 /** Hvordan en gren følger forelderen: forelderens rotasjon eller fast retning i verdensrommet. */
 export type Orientation = 'follow_parent' | 'keep_direction';
@@ -135,6 +179,10 @@ export interface SplineView {
   hidden: boolean;
   locked: boolean;
   orientation: Orientation;
+  /** Splinen og andelen enden er koblet til (nett av spliner). */
+  end_parent: number | null;
+  end_at: number;
+  parts: PartView[];
 }
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };
@@ -160,7 +208,7 @@ export interface DocumentState {
 }
 
 export type GeometryResult =
-  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; registry: RegistryEntry[]; created: number | null }
+  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; registry: RegistryEntry[]; library: Library; created: number | null }
   | { kind: 'preview'; shape: number; mesh: MeshResult }
   | { kind: 'project'; text: string }
   | { kind: 'skeletonPreview'; skeleton: SplineView[]; shapes: { shape: number; mesh: MeshResult | null }[] };

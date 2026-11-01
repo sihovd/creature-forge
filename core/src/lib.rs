@@ -8,6 +8,7 @@ pub mod bend;
 pub mod curve;
 pub mod document;
 pub mod mesh;
+pub mod parts;
 pub mod profile;
 pub mod pull;
 pub mod refine;
@@ -172,6 +173,14 @@ impl JsDocument {
     #[wasm_bindgen(js_name = registryView)]
     pub fn registry_view(&self) -> Result<String, JsError> {
         serde_json::to_string(&self.0.skeleton().registry())
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Delregisteret, speilingen og meshinnstillingene som JSON
+    /// (se `skeleton::LibraryView`).
+    #[wasm_bindgen(js_name = libraryView)]
+    pub fn library_view(&self) -> Result<String, JsError> {
+        serde_json::to_string(&self.0.skeleton().library())
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
