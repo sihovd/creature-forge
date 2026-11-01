@@ -61,9 +61,21 @@ export type SkeletonEdit =
   | { kind: 'renameEntry'; entry: number; name: string }
   | { kind: 'removeEntry'; entry: number }
   | { kind: 'setLayer'; spline: number; hidden: boolean; locked: boolean }
+  | { kind: 'setCut'; spline: number; cut: Cut | null }
   | { kind: 'batch'; edits: SkeletonEdit[] };
 
 export type AnchorKind = 'smooth' | 'corner';
+
+/**
+ * Negativ form («− Trekk fra»): laget skjærer i lagene i `targets`.
+ * Hva formen skjærer i er uavhengig av forelder og rekkefølgen i laglisten.
+ * Om kutteren vises, styres av lagets synlighet; `active` styrer om den skjærer.
+ */
+export interface Cut {
+  targets: number[];
+  active: boolean;
+  sharp: boolean;
+}
 
 /** Hvor en mesh-del kommer fra: en innebygd form eller en importert mesh. */
 export type PartSource = { kind: 'builtin'; name: string } | { kind: 'stored'; id: number };
@@ -183,6 +195,8 @@ export interface SplineView {
   end_parent: number | null;
   end_at: number;
   parts: PartView[];
+  /** Negativ form; bare på rotspliner. */
+  cut: Cut | null;
 }
 
 export type GeometryRequest = Command & { id: number; spacingMm: number };

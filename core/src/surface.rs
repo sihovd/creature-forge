@@ -274,98 +274,202 @@ pub fn body_mesh(skeleton: &Skeleton, root: SplineId, h: f64) -> Result<TriMesh,
     };
 
     for tube in &tubes {
-        let k = blend_width(tube.radius);
-        let reach = tube.radius + k + 2.0 * h;
-        // Avstand til denne splinen alene, i boksen rundt kurven.
-        let tlo = [0, 1, 2].map(|i| {
-            tube.points
-                .iter()
-                .map(|p| p[i])
-                .fold(f64::INFINITY, f64::min)
-                - reach
-        });
-        let thi = [0, 1, 2].map(|i| {
-            tube.points
-                .iter()
-                .map(|p| p[i])
-                .fold(f64::NEG_INFINITY, f64::max)
-                + reach
-        });
-        let [(bi, ei), (bj, ej), (bk, ek)] = grid.range(tlo, thi);
-        let (li, lj) = (ei - bi + 1, ej - bj + 1);
-        let size = li * lj * (ek - bk + 1);
-        // Nærmeste linjestykke for hvert rutepunkt: avstand, stykke og parameter.
-        let mut near = vec![(f64::INFINITY, 0u32, 0.0f64); size];
-        for (si, w) in tube.points.windows(2).enumerate() {
-            let (a, b) = (w[0], w[1]);
-            let slo = [0, 1, 2].map(|i| a[i].min(b[i]) - reach);
-            let shi = [0, 1, 2].map(|i| a[i].max(b[i]) + reach);
-            let [(i0, i1), (j0, j1), (k0, k1)] = grid.range(slo, shi);
-            for kk in k0..=k1 {
-                for jj in j0..=j1 {
-                    for ii in i0..=i1 {
-                        let (d, t) = segment_project(grid.point(ii, jj, kk), a, b);
-                        let e = &mut near[((kk - bk) * lj + (jj - bj)) * li + (ii - bi)];
-                        if d < e.0 {
-                            *e = (d, si as u32, t);
-                        }
-                    }
-                }
-            }
-        }
-        let mut local = vec![f64::INFINITY; size];
-        for kk in bk..=ek {
-            for jj in bj..=ej {
-                for ii in bi..=ei {
-                    let idx = ((kk - bk) * lj + (jj - bj)) * li + (ii - bi);
-                    let (d, si, t) = near[idx];
-                    if !d.is_finite() {
-                        continue;
-                    }
-                    local[idx] = match &tube.field {
-                        None => d - tube.radius,
-                        Some(f) => {
-                            let si = si as usize;
-                            let (a, b) = (tube.points[si], tube.points[si + 1]);
-                            let c = add(a, scale(sub(b, a), t));
-                            f.distance(grid.point(ii, jj, kk), si, t, c)
-                        }
-                    };
-                }
-            }
-        }
-        for kk in bk..=ek {
-            for jj in bj..=ej {
-                for ii in bi..=ei {
-                    let d = local[((kk - bk) * lj + (jj - bj)) * li + (ii - bi)];
-                    if !d.is_finite() {
-                        continue;
-                    }
-                    let idx = grid.index(ii, jj, kk);
-                    let v = &mut grid.values[idx];
-                    *v = if v.is_finite() {
-                        smooth_min(*v, d, k)
-                    } else {
-                        d
-                    };
-                }
-            }
-        }
+        accumulate(&mut grid, tube, h);
     }
     if mirror {
-        let n0 = grid.n[0];
-        for row in grid.values.chunks_mut(n0) {
-            for i in 0..n0 / 2 {
-                let v = row[i].min(row[n0 - 1 - i]);
-                row[i] = v;
-                row[n0 - 1 - i] = v;
-            }
-        }
+        symmetrize(&mut grid);
+    }
+    for (cutter, cut) in skeleton.cutters_of(root) {
+        subtract(&mut grid, &world, skeleton, cutter, cut.sharp, mirror)?;
     }
     for v in grid.values.iter_mut() {
         *v = v.min(far);
     }
-    Ok(surface_nets(&grid))
+    Ok(surface_nets(&mut grid))
+}
+
+/// Speiler feltet om x = 0. Rutenettet må ligge symmetrisk om x = 0.
+fn symmetrize(grid: &mut Grid) {
+    let n0 = grid.n[0];
+    for row in grid.values.chunks_mut(n0) {
+        for i in 0..n0 / 2 {
+            let v = row[i].min(row[n0 - 1 - i]);
+            row[i] = v;
+            row[n0 - 1 - i] = v;
+        }
+    }
+}
+
+/// Glatt maksimum: snittet av to former med en avrundet overgang av bredde `k`.
+fn smooth_max(a: f64, b: f64, k: f64) -> f64 {
+    -smooth_min(-a, -b, k)
+}
+
+/// Bredden på overgangen langs et kutt. En skarp kant får en overgang på
+/// én rute, så kanten er så skarp rutenettet kan gjengi uten at
+/// overflaten får tvetydige ruter (og dermed hull). Myk overgang er som
+/// sammensmeltingen av det tynneste røret i kutteren.
+fn cut_blend(tubes: &[Tube], sharp: bool, h: f64) -> f64 {
+    let r = tubes.iter().map(|t| t.radius).fold(f64::INFINITY, f64::min);
+    if sharp || !r.is_finite() {
+        h
+    } else {
+        blend_width(r).max(h)
+    }
+}
+
+/// Trekker den negative formen med roten `cutter` fra feltet i rutenettet
+/// (issue #12 punkt 4). Kutterens felt beregnes i et utsnitt av samme
+/// rutenett rundt kutteren, så punktene faller sammen.
+fn subtract(
+    grid: &mut Grid,
+    world: &BTreeMap<SplineId, WorldSpline>,
+    skeleton: &Skeleton,
+    cutter: SplineId,
+    sharp: bool,
+    mirror: bool,
+) -> Result<(), String> {
+    let h = grid.h;
+    let tubes = tubes(world, skeleton, cutter, h)?;
+    if tubes.is_empty() {
+        return Ok(());
+    }
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for t in &tubes {
+        let pad = t.radius + blend_width(t.radius) + 2.0 * h;
+        for p in &t.points {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a] - pad);
+                hi[a] = hi[a].max(p[a] + pad);
+            }
+        }
+    }
+    if mirror {
+        let m = lo[0].abs().max(hi[0].abs());
+        lo[0] = -m;
+        hi[0] = m;
+    }
+    let grid_hi = grid.point(grid.n[0] - 1, grid.n[1] - 1, grid.n[2] - 1);
+    if (0..3).any(|a| hi[a] < grid.origin[a] || lo[a] > grid_hi[a]) {
+        return Ok(());
+    }
+    let [(i0, i1), (j0, j1), (k0, k1)] = grid.range(lo, hi);
+    let mut sub = Grid {
+        origin: grid.point(i0, j0, k0),
+        h,
+        n: [i1 - i0 + 1, j1 - j0 + 1, k1 - k0 + 1],
+        values: vec![f64::INFINITY; (i1 - i0 + 1) * (j1 - j0 + 1) * (k1 - k0 + 1)],
+    };
+    for t in &tubes {
+        accumulate(&mut sub, t, h);
+    }
+    let k = cut_blend(&tubes, sharp, h);
+    let n0 = grid.n[0];
+    for kk in 0..sub.n[2] {
+        for jj in 0..sub.n[1] {
+            for ii in 0..sub.n[0] {
+                let mut c = sub.values[sub.index(ii, jj, kk)];
+                if mirror {
+                    // Speilbildet av rutepunktet i hovedrutenettet.
+                    let mi = n0 - 1 - (i0 + ii);
+                    if (i0..=i1).contains(&mi) {
+                        c = c.min(sub.values[sub.index(mi - i0, jj, kk)]);
+                    }
+                }
+                if !c.is_finite() {
+                    continue;
+                }
+                let idx = grid.index(i0 + ii, j0 + jj, k0 + kk);
+                let v = &mut grid.values[idx];
+                if v.is_finite() {
+                    *v = smooth_max(*v, -c, k);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Legger feltet til ett rør inn i rutenettet med glatt minimum.
+fn accumulate(grid: &mut Grid, tube: &Tube, h: f64) {
+    let k = blend_width(tube.radius);
+    let reach = tube.radius + k + 2.0 * h;
+    // Avstand til denne splinen alene, i boksen rundt kurven.
+    let tlo = [0, 1, 2].map(|i| {
+        tube.points
+            .iter()
+            .map(|p| p[i])
+            .fold(f64::INFINITY, f64::min)
+            - reach
+    });
+    let thi = [0, 1, 2].map(|i| {
+        tube.points
+            .iter()
+            .map(|p| p[i])
+            .fold(f64::NEG_INFINITY, f64::max)
+            + reach
+    });
+    let [(bi, ei), (bj, ej), (bk, ek)] = grid.range(tlo, thi);
+    let (li, lj) = (ei - bi + 1, ej - bj + 1);
+    let size = li * lj * (ek - bk + 1);
+    // Nærmeste linjestykke for hvert rutepunkt: avstand, stykke og parameter.
+    let mut near = vec![(f64::INFINITY, 0u32, 0.0f64); size];
+    for (si, w) in tube.points.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let slo = [0, 1, 2].map(|i| a[i].min(b[i]) - reach);
+        let shi = [0, 1, 2].map(|i| a[i].max(b[i]) + reach);
+        let [(i0, i1), (j0, j1), (k0, k1)] = grid.range(slo, shi);
+        for kk in k0..=k1 {
+            for jj in j0..=j1 {
+                for ii in i0..=i1 {
+                    let (d, t) = segment_project(grid.point(ii, jj, kk), a, b);
+                    let e = &mut near[((kk - bk) * lj + (jj - bj)) * li + (ii - bi)];
+                    if d < e.0 {
+                        *e = (d, si as u32, t);
+                    }
+                }
+            }
+        }
+    }
+    let mut local = vec![f64::INFINITY; size];
+    for kk in bk..=ek {
+        for jj in bj..=ej {
+            for ii in bi..=ei {
+                let idx = ((kk - bk) * lj + (jj - bj)) * li + (ii - bi);
+                let (d, si, t) = near[idx];
+                if !d.is_finite() {
+                    continue;
+                }
+                local[idx] = match &tube.field {
+                    None => d - tube.radius,
+                    Some(f) => {
+                        let si = si as usize;
+                        let (a, b) = (tube.points[si], tube.points[si + 1]);
+                        let c = add(a, scale(sub(b, a), t));
+                        f.distance(grid.point(ii, jj, kk), si, t, c)
+                    }
+                };
+            }
+        }
+    }
+    for kk in bk..=ek {
+        for jj in bj..=ej {
+            for ii in bi..=ei {
+                let d = local[((kk - bk) * lj + (jj - bj)) * li + (ii - bi)];
+                if !d.is_finite() {
+                    continue;
+                }
+                let idx = grid.index(ii, jj, kk);
+                let v = &mut grid.values[idx];
+                *v = if v.is_finite() {
+                    smooth_min(*v, d, k)
+                } else {
+                    d
+                };
+            }
+        }
+    }
 }
 
 impl Tube {
@@ -395,10 +499,24 @@ pub struct BodyField {
     /// Boksen rundt hvert rør, med plass til sammensmeltingen.
     boxes: Vec<(Vec3, Vec3)>,
     mirror: bool,
+    /// Negative former som skjærer i kroppen, med overgangsbredden.
+    cuts: Vec<(BodyField, f64)>,
 }
 
 impl BodyField {
+    /// Feltet til kroppen `root` med de negative formene som skjærer i den.
     pub fn new(skeleton: &Skeleton, root: SplineId, h: f64) -> Result<BodyField, String> {
+        let mut field = BodyField::plain(skeleton, root, h)?;
+        for (cutter, cut) in skeleton.cutters_of(root) {
+            let c = BodyField::plain(skeleton, cutter, h)?;
+            let k = cut_blend(&c.tubes, cut.sharp, h);
+            field.cuts.push((c, k));
+        }
+        Ok(field)
+    }
+
+    /// Feltet til kroppen alene.
+    fn plain(skeleton: &Skeleton, root: SplineId, h: f64) -> Result<BodyField, String> {
         let world = skeleton.evaluate()?;
         let tubes = tubes(&world, skeleton, root, h)?;
         let boxes = tubes
@@ -421,6 +539,7 @@ impl BodyField {
             tubes,
             boxes,
             mirror: skeleton.mirror(),
+            cuts: Vec::new(),
         })
     }
 
@@ -445,12 +564,17 @@ impl BodyField {
     }
 
     pub fn value(&self, p: Vec3) -> f64 {
-        let v = self.one_side(p);
+        let mut v = self.one_side(p);
         if self.mirror {
-            v.min(self.one_side([-p[0], p[1], p[2]]))
-        } else {
-            v
+            v = v.min(self.one_side([-p[0], p[1], p[2]]));
         }
+        for (cutter, k) in &self.cuts {
+            let c = cutter.value(p);
+            if c.is_finite() && v.is_finite() {
+                v = smooth_max(v, -c, *k);
+            }
+        }
+        v
     }
 
     fn gradient(&self, p: Vec3, e: f64) -> Vec3 {
@@ -543,10 +667,71 @@ pub fn refine_creases(mesh: &mut TriMesh, field: &BodyField, h: f64, levels: u32
     }
 }
 
+/// Fjerner tvetydige sideflater i rutenettet: en side der hjørnene på den
+/// ene diagonalen er inne og hjørnene på den andre ute. Der deles en kant
+/// mellom to ruter av fire firkanter, og meshen blir ikke en lukket flate.
+/// Det skjer der to flater møtes i en skarp kile, for eksempel langs kanten
+/// av et kutt. Hjørnet nærmest overflaten flyttes over til den andre siden
+/// (en endring på under én rute), slik at diagonalen som er sammenhengende
+/// i sidens midtpunkt kobles. Gjentas til ingen sider er tvetydige.
+fn resolve_ambiguous_faces(grid: &mut Grid) {
+    let [nx, ny, nz] = grid.n;
+    if nx < 2 || ny < 2 || nz < 2 {
+        return;
+    }
+    let eps = grid.h * 1e-6;
+    let dirs = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    for _ in 0..8 {
+        let mut changed = false;
+        // Sidene med normal langs aksen `axis`, utspent av de to andre aksene.
+        for axis in 0..3 {
+            let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+            let (da, db) = (dirs[a], dirs[b]);
+            let mut lim = grid.n;
+            lim[a] -= 1;
+            lim[b] -= 1;
+            for k in 0..lim[2] {
+                for j in 0..lim[1] {
+                    for i in 0..lim[0] {
+                        let at = |o: [usize; 3]| grid.index(i + o[0], j + o[1], k + o[2]);
+                        let idx = [
+                            at([0, 0, 0]),
+                            at(da),
+                            at([da[0] + db[0], da[1] + db[1], da[2] + db[2]]),
+                            at(db),
+                        ];
+                        let v = idx.map(|x| grid.values[x]);
+                        let s = v.map(|x| x < 0.0);
+                        if !(s[0] == s[2] && s[1] == s[3] && s[0] != s[1]) {
+                            continue;
+                        }
+                        // Sidens midtpunkt avgjør hvilken diagonal som henger sammen.
+                        let finite: Vec<f64> =
+                            v.iter().copied().filter(|x| x.is_finite()).collect();
+                        let centre_inside = finite.len() == 4 && finite.iter().sum::<f64>() < 0.0;
+                        // Flytt hjørnet nærmest overflaten på diagonalen som ikke henger sammen.
+                        let pick = (0..4)
+                            .filter(|&c| s[c] != centre_inside)
+                            .min_by(|&x, &y| v[x].abs().total_cmp(&v[y].abs()))
+                            .unwrap();
+                        grid.values[idx[pick]] = if centre_inside { -eps } else { eps };
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 /// Overflaten der feltet skifter fortegn. Ett punkt per rute som krysses,
 /// plassert i snittet av kantkryssingene, og én firkant per rutekant som
 /// krysses. Feltet er positivt langs randen, så overflaten er lukket.
-fn surface_nets(grid: &Grid) -> TriMesh {
+fn surface_nets(grid: &mut Grid) -> TriMesh {
+    resolve_ambiguous_faces(grid);
+    let grid = &*grid;
     let [nx, ny, nz] = grid.n;
     let cell = |i: usize, j: usize, k: usize| (k * (ny - 1) + j) * (nx - 1) + i;
     let mut vertex_of = vec![u32::MAX; (nx - 1) * (ny - 1) * (nz - 1)];
@@ -947,5 +1132,161 @@ mod tests {
         let field = BodyField::new(&sk, id, 1.5).unwrap();
         assert!(field.value([-20.0, 15.0, 0.0]) < -4.0);
         assert!((field.value([-25.0, 15.0, 0.0])).abs() < 0.1);
+    }
+
+    /// En kule med radius 20 i (0, 25, 0) og en kule med radius 10 i `at`.
+    fn ball_and_cutter(at: Vec3) -> (Skeleton, SplineId, SplineId) {
+        let (mut sk, ball) = sphere(20.0);
+        let cutter = sk
+            .apply(&E::AddRoot {
+                start: [at[0], at[1] - 0.25, at[2]],
+                direction: [0.0, 1.0, 0.0],
+                length: 0.5,
+                thickness: 10.0,
+            })
+            .unwrap()
+            .unwrap();
+        (sk, ball, cutter)
+    }
+
+    fn cut(targets: Vec<SplineId>) -> crate::skeleton::Cut {
+        crate::skeleton::Cut {
+            targets,
+            active: true,
+            sharp: true,
+        }
+    }
+
+    #[test]
+    fn negativ_form_skjaerer_bare_i_valgte_lag() {
+        // Kutteren sitter på kulas side ved x = 20.
+        let (mut sk, ball, cutter) = ball_and_cutter([20.0, 25.25, 0.0]);
+        let whole = body_mesh(&sk, ball, 1.0).unwrap();
+        sk.apply(&E::SetCut {
+            spline: cutter,
+            cut: Some(cut(vec![ball])),
+        })
+        .unwrap();
+        let cut_mesh = body_mesh(&sk, ball, 1.0).unwrap();
+        assert!(cut_mesh.is_closed_manifold());
+        // Volumet av kula minus linsen der kulene overlapper.
+        let (r1, r2, d) = (20.0f64, 10.0f64, 20.0f64);
+        let lens = PI
+            * (r1 + r2 - d).powi(2)
+            * (d * d + 2.0 * d * r2 - 3.0 * r2 * r2 + 2.0 * d * r1 + 6.0 * r1 * r2 - 3.0 * r1 * r1)
+            / (12.0 * d);
+        let expected = whole.signed_volume() - lens;
+        let v = cut_mesh.signed_volume();
+        assert!((v - expected).abs() / expected < 0.03, "{v} mot {expected}");
+        // Ingen punkter inne i kutteren, og kula når ikke lenger x = 20.
+        for p in &cut_mesh.positions {
+            assert!(length(sub(*p, [20.0, 25.25, 0.0])) > 10.0 - 0.6, "{p:?}");
+        }
+        let max_x = cut_mesh
+            .positions
+            .iter()
+            .map(|p| p[0])
+            .fold(f64::MIN, f64::max);
+        // Kanten av kuttet ligger der kulene møtes, ved x = 17,5.
+        assert!(max_x < 18.0, "{max_x}");
+        // Kutteren selv er uendret.
+        let own = body_mesh(&sk, cutter, 1.0).unwrap();
+        assert!((own.signed_volume() - 4.0 / 3.0 * PI * 1000.0).abs() < 0.06 * 4188.0);
+        // Feltet i enkeltpunkter (brukt til fortetting) har samme kutt.
+        let field = BodyField::new(&sk, ball, 1.0).unwrap();
+        assert!(field.value([19.0, 25.25, 0.0]) > 0.0);
+        assert!(field.value([-10.0, 25.25, 0.0]) < 0.0);
+    }
+
+    #[test]
+    fn negativ_form_som_ikke_er_aktiv_skjaerer_ikke() {
+        let (mut sk, ball, cutter) = ball_and_cutter([20.0, 25.25, 0.0]);
+        let whole = body_mesh(&sk, ball, 1.5).unwrap();
+        let mut c = cut(vec![ball]);
+        c.active = false;
+        sk.apply(&E::SetCut {
+            spline: cutter,
+            cut: Some(c),
+        })
+        .unwrap();
+        assert_eq!(
+            body_mesh(&sk, ball, 1.5).unwrap().positions,
+            whole.positions
+        );
+        // Uten mål skjærer den heller ikke.
+        sk.apply(&E::SetCut {
+            spline: cutter,
+            cut: Some(cut(vec![])),
+        })
+        .unwrap();
+        assert_eq!(
+            body_mesh(&sk, ball, 1.5).unwrap().positions,
+            whole.positions
+        );
+    }
+
+    #[test]
+    fn myk_overgang_fjerner_mer_enn_skarp_kant() {
+        let (mut sk, ball, cutter) = ball_and_cutter([20.0, 25.25, 0.0]);
+        sk.apply(&E::SetCut {
+            spline: cutter,
+            cut: Some(cut(vec![ball])),
+        })
+        .unwrap();
+        let sharp = body_mesh(&sk, ball, 1.0).unwrap().signed_volume();
+        let mut c = cut(vec![ball]);
+        c.sharp = false;
+        sk.apply(&E::SetCut {
+            spline: cutter,
+            cut: Some(c),
+        })
+        .unwrap();
+        let soft = body_mesh(&sk, ball, 1.0).unwrap();
+        assert!(soft.is_closed_manifold());
+        assert!(
+            soft.signed_volume() < sharp,
+            "{} {sharp}",
+            soft.signed_volume()
+        );
+    }
+
+    #[test]
+    fn speilet_negativ_form_skjaerer_paa_begge_sider() {
+        // En stav langs x, og en kutter ved x = 15 som speiles til x = -15.
+        let mut sk = Skeleton::new();
+        let rod = sk
+            .apply(&E::AddRoot {
+                start: [-30.0, 0.0, 0.0],
+                direction: [1.0, 0.0, 0.0],
+                length: 60.0,
+                thickness: 5.0,
+            })
+            .unwrap()
+            .unwrap();
+        let cutter = sk
+            .apply(&E::AddRoot {
+                start: [15.0, -0.25, 0.0],
+                direction: [0.0, 1.0, 0.0],
+                length: 0.5,
+                thickness: 8.0,
+            })
+            .unwrap()
+            .unwrap();
+        sk.apply(&E::SetMirror { mirror: true }).unwrap();
+        sk.apply(&E::SetCut {
+            spline: cutter,
+            cut: Some(cut(vec![rod])),
+        })
+        .unwrap();
+        let m = body_mesh(&sk, rod, 1.0).unwrap();
+        assert!(m.is_closed_manifold());
+        // Staven er kuttet i tre biter: midten og de to endene.
+        assert_eq!(components(&m), 3);
+        for x in [15.0, -15.0] {
+            assert!(m
+                .positions
+                .iter()
+                .all(|p| length(sub(*p, [x, 0.0, 0.0])) > 7.0));
+        }
     }
 }
