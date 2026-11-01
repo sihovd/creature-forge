@@ -941,16 +941,22 @@ mod tests {
     #[test]
     fn h_profil_gir_innhakk_langs_hele_splinen() {
         use crate::profile::Profile;
+        // H i begge ender gir H langs hele splinen.
         let (sk, id) = rod(vec![
             E::AddProfile {
                 spline: 1,
-                at: 0.5,
+                at: 0.0,
                 from: None,
             },
             E::SetProfile {
                 spline: 1,
                 station: 0,
                 profile: Profile::h_shape(),
+            },
+            E::AddProfile {
+                spline: 1,
+                at: 1.0,
+                from: Some(0),
             },
             E::SetFlatEnd {
                 spline: 1,
@@ -1288,5 +1294,52 @@ mod tests {
                 .iter()
                 .all(|p| length(sub(*p, [x, 0.0, 0.0])) > 7.0));
         }
+    }
+
+    #[test]
+    fn en_enkelt_kontur_former_omraadet_rundt_seg_og_kan_flyttes() {
+        use crate::profile::Profile;
+        let flat = |at: f64| {
+            rod(vec![
+                E::AddProfile {
+                    spline: 1,
+                    at,
+                    from: None,
+                },
+                E::SetProfile {
+                    spline: 1,
+                    station: 0,
+                    profile: Profile::ellipse(2.0, 0.5),
+                },
+            ])
+        };
+        // Bredden (langs y eller z) der konturen ligger og ved den andre enden.
+        let width = |m: &TriMesh, x0: f64, x1: f64| {
+            m.positions
+                .iter()
+                .filter(|p| p[0] > x0 && p[0] < x1)
+                .map(|p| p[1].abs().max(p[2].abs()))
+                .fold(0.0, f64::max)
+        };
+        let (sk, id) = flat(0.2);
+        let near = body_mesh(&sk, id, 1.0).unwrap();
+        assert!(near.is_closed_manifold());
+        // Ved konturen er formen 20 mm bred; mot den andre enden går den
+        // over i vanlig tykkelse (10 mm).
+        assert!(
+            width(&near, 10.0, 14.0) > 18.0,
+            "{}",
+            width(&near, 10.0, 14.0)
+        );
+        assert!(
+            width(&near, 52.0, 56.0) < 13.0,
+            "{}",
+            width(&near, 52.0, 56.0)
+        );
+        // Flyttet konturen, flytter den brede delen seg.
+        let (sk, id) = flat(0.8);
+        let far = body_mesh(&sk, id, 1.0).unwrap();
+        assert!(width(&far, 46.0, 50.0) > 18.0);
+        assert!(width(&far, 4.0, 8.0) < 13.0);
     }
 }
