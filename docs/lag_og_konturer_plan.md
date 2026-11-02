@@ -114,3 +114,5 @@ Appen skal ikke fungere på telefon, fordi skjermen er for liten. Desktop er hov
 - **Verktøylinje** til venstre for laglisten med Velg, Bézier, Ny spline, Ny gren, Ny kontur, Mesh-del, Speil og Innstillinger. På små skjermer ligger den vannrett øverst.
 - **Punkter flyttes fritt** i synsplanet. Med Alt flyttes et punkt i XY-, XZ- eller YZ-planet, det som vender mest mot kameraet. Tuppen beholder uttrekk, panorering og bøying.
 - **Speilmodus** (`Skeleton::mirror`) speiler hele modellen om x = 0: feltet tar minimum av punktet og speilbildet på et symmetrisk rutenett, uttrekk og mesh-deler speiles, og splinene vises stiplet på speilsiden.
+
+**1. november 2026 (Sivert):** en enkelt kontur gjaldt hele splinen, så formen ble lik uansett hvor konturen ble dratt. Nå former én kontur bare området rundt seg, og formen går jevnt over i en sirkel med splinens tykkelse mot endene (`ProfileTrack::new`). Med to eller flere konturer er alt som før; legg konturer i begge ender for å få samme omriss langs hele splinen.

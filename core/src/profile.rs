@@ -408,6 +408,9 @@ fn best_shift(a: &[Vec2], b: &[Vec2]) -> usize {
         .unwrap_or(0)
 }
 
+/// En kontur nærmere enden enn dette regnes som å ligge i enden.
+const END_EPS: f64 = 1e-6;
+
 /// Overgangen mellom stasjonene langs én spline.
 pub struct ProfileTrack {
     stations: Vec<ResolvedStation>,
@@ -419,17 +422,34 @@ pub struct ProfileTrack {
 }
 
 impl ProfileTrack {
-    /// `stations` må være sortert etter `at`. Uten stasjoner er profilen en sirkel.
+    /// `stations` må være sortert etter `at`. Uten stasjoner er profilen en
+    /// sirkel. Én kontur former bare området rundt seg: formen går jevnt
+    /// over i en sirkel med splinens tykkelse mot endene, så det betyr noe
+    /// hvor konturen ligger (Sivert 1. november 2026).
     pub fn new(stations: Vec<ResolvedStation>) -> ProfileTrack {
-        let stations = if stations.is_empty() {
-            vec![ResolvedStation {
-                at: 0.0,
-                profile: Profile::circle(),
-                scale: 1.0,
-                rotation: 0.0,
-            }]
-        } else {
-            stations
+        let circle = |at: f64, rotation: f64| ResolvedStation {
+            at,
+            profile: Profile::circle(),
+            scale: 1.0,
+            rotation,
+        };
+        let stations = match stations.len() {
+            0 => vec![circle(0.0, 0.0)],
+            1 => {
+                let only = stations.into_iter().next().unwrap();
+                let mut out = Vec::new();
+                if only.at > END_EPS {
+                    out.push(circle(0.0, only.rotation));
+                }
+                let at = only.at;
+                let rotation = only.rotation;
+                out.push(only);
+                if at < 1.0 - END_EPS {
+                    out.push(circle(1.0, rotation));
+                }
+                out
+            }
+            _ => stations,
         };
         let exact: Vec<_> = stations.iter().map(|s| s.profile.polygon()).collect();
         let uniform: Vec<_> = exact
