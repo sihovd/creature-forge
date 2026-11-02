@@ -26,6 +26,8 @@ Spline-skjelett ([issue #4](https://github.com/sihovd/creature-forge/issues/4)):
 
 Lag og grunnrettinger (29. oktober 2026): et lag er én rotspline med alle grener. Laglisten til venstre viser lag, grener og konturer; valg i listen og i 3D er det samme, og lag kan navngis, skjules og låses (låsing håndheves i kjernen). «Ny spline» viser et aksekors der uttrekksretningen velges, og «Legg til kule» er fjernet. Bézier-verktøyet setter inn et ankerpunkt der brukeren trykker på kurven. Langt trykk med finger eller penn gir samme hurtigmeny som høyreklikk. «Lagre» og «Åpne» bruker prosjektfilen `.cfproj`. En gren kan følge forelderens rotasjon eller beholde retningen i rommet, «Ny gren» viser et retningshåndtak, og grenens feste kan dras langs forelderen og gjennom kryss over på andre spliner i laget. «Rediger kontur» viser tverrsnittet med kameraet vinkelrett på konturen, og omrisset redigeres direkte på modellen; konturer kan dras langs splinen. Konturregisteret har presets (sirkel, ellipse, egg, trekant, kvadrat, H), volumpresets (hode, kule) og egne lagrede profiler og volumer som lagres i prosjektfilen. Kartlegging, rekkefølge og videre retning (Surface Pen og Surface Brush, farger, ikoner) står i [lag, grenfester og konturredigering](docs/lag_og_konturer_plan.md).
 
+Utseende etter Siverts skisse (1. november 2026): lyst toppfelt med prosjektnavn, angre/gjør om, tema, lagliste og «Eksporter» (binær STL i mm, z opp), lagpanel til venstre og «Inspektør» til høyre med tomme tilstander, lys scene med rutenett som tones ut, myk skygge, visningskube med X/Y/Z og zoomknapper, og en palett nederst med fanene Grunnformer, Detaljer, Ledd og Kontroll. Grunnformene Kule, Kapsel, Kjegle og Boks er spline-former (én rotspline med konturer og ender), og hver form er ett angresteg. Fanen Ledd er en plassholder. Mørkt tema huskes i nettleseren.
+
 Sivert avklarte 27. oktober 2026 at brukeren skal se et tomt arbeidsrom når appen starter. Spesifikasjonen (kapittel 3, steg 1) er oppdatert tilsvarende.
 
 Claude-artefakten er lest og eksportert. Den inneholder en utviklingsplan, ikke applikasjonskode. Originaleksporten er bevart uendret i [Claude-planen](docs/references/Claude_plan_for_forste_versjon_original.md).
@@ -55,6 +57,8 @@ npm run dev              # utviklingsserver på http://localhost:5173
 npm test                 # enhetstester for grepsberegningene
 npm run build && npm run test:e2e   # nettlesertester (desktop, iPad Pro og telefonsperre)
 ```
+
+Bildene av grunnformene i paletten (`web/public/shapes/`) lages på nytt med `node scripts/thumbnails.mjs` fra `web/` mens `npm run dev` kjører.
 
 ## Sentrale krav
 

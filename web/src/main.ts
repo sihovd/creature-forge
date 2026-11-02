@@ -1,3 +1,8 @@
+import '@fontsource-variable/inter';
+import {
+  Box, ChevronDown, FolderOpen, LayoutGrid, Link, Minus, Monitor, Moon, MousePointer2, Pencil, Plus, Redo2, Save, ScanSearch,
+  Settings, Sparkles, Sun, Undo2, Upload, createIcons,
+} from 'lucide';
 import { AxisGizmo } from './axis-gizmo';
 import { ContextMenu, type MenuItem } from './context-menu';
 import { ContourMode } from './contour-mode';
@@ -10,10 +15,20 @@ import { LayerPanel, splineName } from './layer-panel';
 import { PartsPanel } from './parts-panel';
 import { ProfilePanel } from './profile-panel';
 import { PullTool } from './pull-tool';
+import { primitiveEdit, primitiveRadius, PRIMITIVE_NAMES, type PrimitiveKind } from './primitives';
 import { polylineFraction } from './skeleton-math';
 import { SkeletonTool } from './skeleton-tool';
 import { SkeletonView, type Selection } from './skeleton-view';
+import { binaryStl } from './stl';
+import { ViewCube } from './view-cube';
 import { Viewport } from './viewport';
+
+createIcons({
+  icons: {
+    Box, ChevronDown, FolderOpen, LayoutGrid, Link, Minus, Monitor, Moon, MousePointer2, Pencil, Plus, Redo2, Save, ScanSearch,
+    Settings, Sparkles, Sun, Undo2, Upload,
+  },
+});
 
 /** Lengden på en ny spline, i mm. */
 const NEW_SPLINE_MM = 40;
@@ -67,6 +82,11 @@ const toolMirror = $<HTMLButtonElement>('#tool-mirror');
 const settingsDialog = $<HTMLDialogElement>('#settings');
 const creaseDetail = $<HTMLSelectElement>('#crease-detail');
 const creaseAngle = $<HTMLInputElement>('#crease-angle');
+const layersEmpty = $('#layers-empty');
+const inspectorEmpty = $('#inspector-empty');
+const inspectorHead = $('#inspector-head');
+const exportButton = $<HTMLButtonElement>('#export');
+const shapeCards = [...document.querySelectorAll<HTMLButtonElement>('.shape-card')];
 
 // Arbeidsrommet starter alltid tomt; brukeren legger selv til første form.
 const viewport = new Viewport(container);
@@ -74,6 +94,8 @@ const geometry = new GeometryClient();
 const skeleton = new SkeletonView(viewport);
 const gizmo = new AxisGizmo(viewport, container);
 let activeTool: 'select' | 'bezier' = 'select';
+/** Id-en neste nye spline får, fra dokumentet. */
+let nextSpline = 1;
 const fmt = (n: number) => n.toLocaleString('nb-NO');
 
 function readMm(input: HTMLInputElement, fallback: number) {
@@ -95,7 +117,10 @@ function apply(result: GeometryResult) {
   skeleton.mirror = result.library.mirror;
   skeleton.set(result.skeleton);
   if (registry) registry.entries = result.registry;
-  if (parts) parts.library = result.library;
+  if (parts) {
+    parts.library = result.library;
+    renderDetailCards();
+  }
   syncLibrary(result.library);
   if (result.created !== null) skeleton.select({ spline: result.created, index: null });
   syncLayers();
@@ -115,6 +140,9 @@ function apply(result: GeometryResult) {
   container.dataset.controlPoints = String(viewport.controlPointCount);
   container.dataset.revision = String(result.state.revision);
   hint.hidden = viewport.shapeCount > 0 || skeleton.count > 0;
+  layersEmpty.hidden = skeleton.count > 0;
+  exportButton.disabled = viewport.printableGeometries().length === 0;
+  nextSpline = result.nextSpline;
   return triangles;
 }
 
@@ -205,6 +233,9 @@ function updateInspector() {
   const sel = skeleton.selection;
   const s = sel ? skeleton.spline(sel.spline) : null;
   objectSection.hidden = !s;
+  inspectorEmpty.hidden = !!s;
+  inspectorHead.hidden = !s;
+  editSections.hidden = !s;
   editSections.disabled = !!s?.locked;
   lockedInfo.hidden = !s?.locked;
   if (!s || !sel) {
@@ -594,9 +625,13 @@ addSpline.disabled = true;
 openButton.disabled = true;
 geometry.ready.then((version) => {
   addSpline.disabled = false;
+  for (const c of shapeCards) c.disabled = false;
   openButton.disabled = false;
   saveButton.disabled = false;
   status.textContent = `Geometrikjerne klar (beregningsversjon ${version}).`;
+  // Henter delregisteret og tilstanden, så detaljene i paletten er klare.
+  const ready = status.textContent;
+  run({ kind: 'controlPoints', spacingMm: geometry.spacingMm }, () => ready);
 });
 
 /** Lagrer prosjektet som en .cfproj-fil (JSON). */
@@ -608,13 +643,13 @@ async function saveProject() {
     const blob = new Blob([result.text], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'skapning.cfproj';
+    a.download = `${fileStem()}.cfproj`;
     document.body.append(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     container.dataset.saved = result.text;
-    status.textContent = 'Prosjektet er lagret som skapning.cfproj.';
+    status.textContent = `Prosjektet er lagret som ${a.download}.`;
   } catch (err) {
     status.textContent = `Kunne ikke lagre: ${(err as Error).message}`;
   }
@@ -922,6 +957,194 @@ function openMenu(x: number, y: number) {
   ]);
 }
 
+// ---------- Rammen rundt arbeidsflaten (Siverts skisse 27. oktober 2026) ----------
+
+/** Lagres i nettleseren; private vinduer kan nekte lagring, og da brukes standardverdien. */
+const stored = {
+  get(key: string) {
+    try {
+      return localStorage.getItem(`creature-forge:${key}`);
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: string) {
+    try {
+      localStorage.setItem(`creature-forge:${key}`, value);
+    } catch {
+      // Ikke viktig: valget gjelder bare denne økten.
+    }
+  },
+};
+
+// Tema: lyst som standard, mørkt kan velges og huskes.
+const themeButton = $<HTMLButtonElement>('#toggle-theme');
+function setTheme(dark: boolean) {
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  themeButton.setAttribute('aria-pressed', String(dark));
+  viewport.setTheme(dark);
+}
+setTheme(stored.get('theme') === 'dark');
+themeButton.addEventListener('click', () => {
+  const dark = document.documentElement.dataset.theme !== 'dark';
+  setTheme(dark);
+  stored.set('theme', dark ? 'dark' : 'light');
+});
+
+const wireButton = $<HTMLButtonElement>('#toggle-wireframe');
+wireButton.addEventListener('click', () => {
+  const on = wireButton.getAttribute('aria-pressed') !== 'true';
+  wireButton.setAttribute('aria-pressed', String(on));
+  viewport.setWireframe(on);
+});
+
+// Navnet på skapningen brukes i filnavnene.
+const projectName = $<HTMLInputElement>('#project-name');
+const DEFAULT_NAME = 'Ny skapning';
+projectName.value = stored.get('name') || DEFAULT_NAME;
+projectName.addEventListener('change', () => {
+  projectName.value = projectName.value.trim() || DEFAULT_NAME;
+  stored.set('name', projectName.value);
+});
+projectName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === 'Escape') projectName.blur();
+});
+/** Filnavn uten endelse. Standardnavnet gir «skapning». */
+function fileStem() {
+  const name = projectName.value.trim();
+  if (!name || name === DEFAULT_NAME) return 'skapning';
+  return name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'skapning';
+}
+
+const menuButton = $<HTMLButtonElement>('#project-menu-button');
+const projectMenu = $('#project-menu');
+function showProjectMenu(open: boolean) {
+  projectMenu.hidden = !open;
+  menuButton.setAttribute('aria-expanded', String(open));
+  if (open) projectMenu.querySelector<HTMLButtonElement>('button')?.focus();
+}
+menuButton.addEventListener('click', () => showProjectMenu(projectMenu.hidden));
+document.addEventListener('pointerdown', (e) => {
+  if (!projectMenu.hidden && !(e.target as Element).closest('.project')) showProjectMenu(false);
+});
+projectMenu.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    showProjectMenu(false);
+    menuButton.focus();
+  }
+});
+projectMenu.addEventListener('click', (e) => {
+  const action = (e.target as HTMLElement).closest<HTMLElement>('[data-action]')?.dataset.action;
+  if (!action) return;
+  showProjectMenu(false);
+  if (action === 'rename') {
+    projectName.focus();
+    projectName.select();
+  } else if (action === 'open') openButton.click();
+  else if (action === 'save') saveProject();
+  else if (action === 'export') exportStl();
+});
+
+/** Laster ned de synlige formene som STL for 3D-utskrift. */
+function exportStl() {
+  const meshes = viewport.printableGeometries();
+  if (!meshes.length) {
+    status.textContent = 'Ingen synlige former å eksportere.';
+    return;
+  }
+  const blob = new Blob([binaryStl(meshes)], { type: 'model/stl' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${fileStem()}.stl`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const triangles = meshes.reduce((n, g) => n + (g.index?.count ?? 0) / 3, 0);
+  status.textContent = `Eksporterte ${a.download}: ${meshes.length} ${meshes.length === 1 ? 'form' : 'former'}, ${fmt(triangles)} trekanter (mm, z opp).`;
+}
+exportButton.addEventListener('click', exportStl);
+
+// Paletten nederst: grunnformer, detaljer, ledd og kontroll.
+const tabs = [...document.querySelectorAll<HTMLButtonElement>('.palette-tabs [role="tab"]')];
+function selectTab(tab: HTMLButtonElement) {
+  for (const t of tabs) {
+    const on = t === tab;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById(t.getAttribute('aria-controls')!)!.hidden = !on;
+  }
+}
+for (const t of tabs) {
+  t.addEventListener('click', () => selectTab(t));
+  t.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    const next = tabs[(tabs.indexOf(t) + step + tabs.length) % tabs.length];
+    selectTab(next);
+    next.focus();
+  });
+}
+
+/** Ny grunnform på gulvet: midt i visningen, eller ved siden av formene som finnes. */
+function addPrimitive(kind: PrimitiveKind) {
+  if (busy()) return;
+  const rect = container.getBoundingClientRect();
+  const at = viewport.groundPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) ?? new THREE.Vector3();
+  const pts = skeleton.splines.flatMap((sp) => sp.points.map((q) => ({ x: q[0], r: sp.thickness })));
+  if (pts.length) {
+    // På rad til høyre for formene som finnes, på linje med den første.
+    const right = Math.max(...pts.map((q) => q.x + q.r));
+    const first = skeleton.splines.find((sp) => sp.parent === null);
+    at.set(right + primitiveRadius(kind) + 15, 0, first ? first.points[0][2] : 0);
+  }
+  editSkeleton(primitiveEdit(kind, [at.x, 0, at.z], nextSpline), `${PRIMITIVE_NAMES[kind]} lagt til · dra punktene på splinen for å forme den`);
+}
+for (const card of shapeCards) card.addEventListener('click', () => addPrimitive(card.dataset.primitive as PrimitiveKind));
+
+$<HTMLButtonElement>('#add-layer').addEventListener('click', () => {
+  selectTab(tabs[0]);
+  shapeCards[0].focus();
+  status.textContent = 'Velg en grunnform i paletten, eller «Ny spline» i verktøylinjen.';
+});
+
+// Detaljer: mesh-delene i delregisteret, satt inn på valgt spline.
+const detailCards = $('#detail-cards');
+const partSource = $<HTMLSelectElement>('#part-source');
+function renderDetailCards() {
+  detailCards.replaceChildren(
+    ...parts.library.parts.map((p) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'detail-card';
+      b.dataset.source = p.source.kind === 'builtin' ? `b:${p.source.name}` : `s:${p.source.id}`;
+      b.innerHTML = '<i data-lucide="sparkles"></i>';
+      b.append(p.name);
+      return b;
+    }),
+  );
+  createIcons({ icons: { Sparkles }, root: detailCards });
+}
+detailCards.addEventListener('click', (e) => {
+  const card = (e.target as HTMLElement).closest<HTMLElement>('.detail-card');
+  if (!card) return;
+  partSource.value = card.dataset.source!;
+  partSource.dispatchEvent(new Event('change'));
+  const add = $<HTMLButtonElement>('#add-part');
+  if (add.disabled) status.textContent = 'Velg en spline (ikke hele laget) for å sette inn detaljen.';
+  else add.click();
+});
+
+// Kamera: zoom, tilpass og visningskuben.
+$<HTMLButtonElement>('#zoom-in').addEventListener('click', () => viewport.zoom(0.75));
+$<HTMLButtonElement>('#zoom-out').addEventListener('click', () => viewport.zoom(1 / 0.75));
+$<HTMLButtonElement>('#zoom-fit').addEventListener('click', () => viewport.fitAll());
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'f' || e.key === 'F') viewport.fitAll();
+});
+const viewCube = new ViewCube(viewport, $('#view-cube'));
+
 // Hjelper for automatiserte nettlesertester: skjermposisjonen til det synlige
 // kontrollpunktet nærmest midten av arbeidsflaten.
 declare global {
@@ -939,6 +1162,10 @@ declare global {
       /** Skjermposisjonen til punkt `i` i omrisset til en kontur. */
       ringScreen(spline: number, station: number, i: number): { x: number; y: number } | null;
       cameraPosition(): Vec3;
+      /** Kameraets plassering i forhold til punktet det ser mot. */
+      cameraOffset(): Vec3;
+      /** Midten av en side på visningskuben, i kubens element. */
+      viewCubeFace(axis: 'x' | 'y' | 'z'): { x: number; y: number };
       /** Forelder, feste og orientering. */
       splineInfo(spline: number): { parent: number | null; at: number; orientation: string; layer: number; endParent: number | null; endAt: number; parts: number } | null;
       /** Antall trekanter i kroppen og om den vises (0 når den mangler). */
@@ -1003,6 +1230,12 @@ window.creatureForgeTest = {
   },
   cameraPosition() {
     return arr(viewport.camera.position);
+  },
+  cameraOffset() {
+    return arr(viewport.camera.position.clone().sub(viewport.controls.target));
+  },
+  viewCubeFace(axis) {
+    return viewCube.faceScreen(axis);
   },
   splineInfo(spline) {
     const s = skeleton.spline(spline);

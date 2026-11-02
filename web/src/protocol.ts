@@ -221,8 +221,12 @@ export interface DocumentState {
   canRedo: boolean;
 }
 
+/**
+ * `nextSpline` er id-en neste nye spline får, så en ny spline kan endres i
+ * samme `batch` (ett angresteg).
+ */
 export type GeometryResult =
-  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; registry: RegistryEntry[]; library: Library; created: number | null }
+  | { kind: 'document'; state: DocumentState; shapes: ShapeUpdate[]; skeleton: SplineView[]; registry: RegistryEntry[]; library: Library; created: number | null; nextSpline: number }
   | { kind: 'preview'; shape: number; mesh: MeshResult }
   | { kind: 'project'; text: string }
   | { kind: 'skeletonPreview'; skeleton: SplineView[]; shapes: { shape: number; mesh: MeshResult | null }[] };

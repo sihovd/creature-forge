@@ -9,8 +9,60 @@ export interface ControlPoint {
   normal: THREE.Vector3;
 }
 
-const POINT_COLOR = 0x5d6b62;
-const ACTIVE_COLOR = 0xd2652d;
+const POINT_COLOR = 0x5b6178;
+const ACTIVE_COLOR = 0x6d4fe6;
+/** Utgangsvisningen: kameraet skrått ovenfra, rettet mot midt på en ny form. */
+const HOME_POSITION = new THREE.Vector3(75, 70, 105);
+const HOME_TARGET = new THREE.Vector3(0, 25, 0);
+
+/**
+ * Rutenett på gulvet (y = 0) som toner ut mot horisonten: 10 mm ruter og en
+ * litt tydeligere linje hver 50 mm. Linjene tegnes med skjermderiverte, så
+ * de er like tynne uansett avstand.
+ */
+function fadingGrid() {
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uColor: { value: new THREE.Color(0x8a94a8) },
+      uCenter: { value: new THREE.Vector3() },
+      uFade: { value: 400 },
+    },
+    vertexShader: `
+      varying vec3 vWorld;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vWorld = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform vec3 uCenter;
+      uniform float uFade;
+      varying vec3 vWorld;
+      float line(vec2 p, float size) {
+        vec2 q = p / size;
+        vec2 w = fwidth(q);
+        vec2 g = abs(fract(q - 0.5) - 0.5) / w;
+        // Ruter som blir mindre enn noen få piksler, tones ut i stedet for å flimre.
+        float lod = 1.0 - smoothstep(0.08, 0.3, max(w.x, w.y));
+        return (1.0 - min(min(g.x, g.y), 1.0)) * lod;
+      }
+      void main() {
+        float minor = line(vWorld.xz, 10.0);
+        float major = line(vWorld.xz, 50.0);
+        float fade = 1.0 - smoothstep(uFade * 0.35, uFade, length(vWorld.xz - uCenter.xz));
+        float a = max(minor * 0.28, major * 0.5) * fade;
+        if (a < 0.003) discard;
+        gl_FragColor = vec4(uColor, a);
+      }`,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000).rotateX(-Math.PI / 2), material);
+  mesh.renderOrder = -1;
+  return mesh;
+}
 
 /** 3D-arbeidsflaten. Én scene-enhet er én millimeter. */
 export class Viewport {
@@ -19,12 +71,13 @@ export class Viewport {
   readonly controls: OrbitControls;
   private scene = new THREE.Scene();
   private shapes = new Map<number, THREE.Mesh>();
-  private material = new THREE.MeshStandardMaterial({ color: 0xd9c7a8, roughness: 0.65 });
+  /** Lys, matt «leire», som grunnformene i paletten. */
+  private material = new THREE.MeshStandardMaterial({ color: 0xe6e7ee, roughness: 0.55, metalness: 0 });
   /** Låste lag tegnes litt nedtonet. */
-  private lockedMaterial = new THREE.MeshStandardMaterial({ color: 0xc9c4bb, roughness: 0.8, transparent: true, opacity: 0.75 });
+  private lockedMaterial = new THREE.MeshStandardMaterial({ color: 0xc4c7d2, roughness: 0.8, transparent: true, opacity: 0.75 });
   /** Negative former tegnes gjennomsiktig, så målet de skjærer i synes. */
   private cutterMaterial = new THREE.MeshStandardMaterial({
-    color: 0x8a5cd6,
+    color: 0x7c5cf0,
     roughness: 0.5,
     transparent: true,
     opacity: 0.28,
@@ -43,25 +96,55 @@ export class Viewport {
   private influence: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
   private frameCallbacks: (() => void)[] = [];
+  private grid = fadingGrid();
+  /** Myk skygge under formene på gulvet. */
+  private shadowFloor = new THREE.Mesh(
+    new THREE.PlaneGeometry(600, 600).rotateX(-Math.PI / 2),
+    new THREE.ShadowMaterial({ opacity: 0.1, depthWrite: false }),
+  );
+  private sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  /** Pågående kameraovergang (zoom, tilpass, visningskuben). */
+  private flight: { from: THREE.Vector3; to: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3; up: THREE.Vector3 | null; start: number; ms: number } | null = null;
   /** Under konturredigering tar ikke formgrep og skjelett imot pekeren. */
   interactionLocked = false;
   constructor(private container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Gjennomsiktig lerret: bakgrunnen er en CSS-gradient bak scenen.
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Skyggen tegnes bare på nytt når formene endres, ikke for hvert bilde.
+    this.renderer.shadowMap.autoUpdate = false;
     container.prepend(this.renderer.domElement);
 
-    this.scene.background = new THREE.Color(0xf4f5f2);
-    this.camera.position.set(75, 70, 105);
+    this.camera.position.copy(HOME_POSITION);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.target.set(0, 25, 0);
+    this.controls.target.copy(HOME_TARGET);
     this.controls.enableDamping = true;
+    // Brukeren tar over kameraet: en pågående overgang stoppes.
+    this.controls.addEventListener('start', () => (this.flight = null));
 
-    // Rutenett på 200 × 200 mm med 10 mm ruter, liggende i XZ-planet.
-    this.scene.add(new THREE.GridHelper(200, 20, 0xb9bdb3, 0xdcdfd8));
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xc8c2b4, 1.6));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-    sun.position.set(80, 160, 120);
-    this.scene.add(sun);
+    this.scene.add(this.grid);
+    this.shadowFloor.receiveShadow = true;
+    this.shadowFloor.position.y = -0.05;
+    this.scene.add(this.shadowFloor);
+    // Himmellys, sollys med skygge og et svakt motlys gir myk «leire» uten tunge miljøkart.
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xaeb7ca, 2.1));
+    const fill = new THREE.DirectionalLight(0xdfe6ff, 0.5);
+    fill.position.set(-120, 60, -80);
+    this.scene.add(fill);
+    this.sun.position.set(60, 180, 90);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.radius = 6;
+    this.sun.shadow.bias = -0.0005;
+    const sc = this.sun.shadow.camera;
+    sc.left = sc.bottom = -160;
+    sc.right = sc.top = 160;
+    sc.near = 10;
+    sc.far = 500;
+    this.scene.add(this.sun, this.sun.target);
 
     this.influence = new THREE.Mesh(
       new THREE.RingGeometry(0.96, 1, 64),
@@ -73,8 +156,11 @@ export class Viewport {
 
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
-    this.renderer.setAnimationLoop(() => {
+    this.renderer.setAnimationLoop((time) => {
+      this.fly(time);
       this.controls.update();
+      this.grid.material.uniforms.uCenter.value.copy(this.controls.target);
+      this.grid.material.uniforms.uFade.value = Math.max(300, this.camera.position.distanceTo(this.controls.target) * 3);
       for (const f of this.frameCallbacks) f();
       this.renderer.render(this.scene, this.camera);
     });
@@ -107,18 +193,28 @@ export class Viewport {
       old.geometry.dispose();
       this.shapes.delete(shape);
     }
-    if (!result) return 0;
+    if (!result) {
+      this.renderer.shadowMap.needsUpdate = true;
+      return 0;
+    }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
     geometry.setIndex(new THREE.BufferAttribute(result.indices, 1));
     geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, this.materialFor(shape));
+    mesh.castShadow = !this.cutterShapes.has(shape);
     mesh.visible = !this.hiddenShapes.has(shape);
     mesh.userData.shape = shape;
     this.shapes.set(shape, mesh);
     this.scene.add(mesh);
+    this.renderer.shadowMap.needsUpdate = true;
     return result.indices.length / 3;
+  }
+
+  /** Meshene som skal skrives ut: synlige former, uten negative former (de er allerede trukket fra). */
+  printableGeometries() {
+    return [...this.shapes].filter(([id, m]) => m.visible && !this.cutterShapes.has(id)).map(([, m]) => m.geometry);
   }
 
   /** Antall trekanter i kroppen og om den vises (for testene). */
@@ -153,7 +249,9 @@ export class Viewport {
       mesh.visible = !hidden.has(id);
       mesh.material = this.materialFor(id);
       mesh.renderOrder = cutters.has(id) ? 1 : 0;
+      mesh.castShadow = !cutters.has(id);
     }
+    this.renderer.shadowMap.needsUpdate = true;
     this.rebuildPointMarkers();
   }
 
@@ -324,8 +422,84 @@ export class Viewport {
 
   /** Flytter kameraet tilbake til utgangsvisningen. */
   resetView() {
-    this.camera.position.set(75, 70, 105);
-    this.controls.target.set(0, 25, 0);
+    this.camera.up.set(0, 1, 0);
+    this.camera.position.copy(HOME_POSITION);
+    this.controls.target.copy(HOME_TARGET);
+  }
+
+  /** Flyr kameraet jevnt til en ny plassering. */
+  flyTo(position: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3 | null = null, ms = 320) {
+    this.flight = {
+      from: this.camera.position.clone(),
+      to: position.clone(),
+      fromTarget: this.controls.target.clone(),
+      toTarget: target.clone(),
+      up,
+      start: performance.now(),
+      ms,
+    };
+  }
+
+  private fly(time: number) {
+    const f = this.flight;
+    if (!f) return;
+    const t = Math.min(1, (time - f.start) / f.ms);
+    const k = t < 0 ? 0 : 1 - (1 - t) ** 3;
+    this.camera.position.lerpVectors(f.from, f.to, k);
+    this.controls.target.lerpVectors(f.fromTarget, f.toTarget, k);
+    if (t >= 1) {
+      if (f.up) this.camera.up.copy(f.up);
+      this.flight = null;
+    }
+  }
+
+  /** Zoomer mot midten av visningen; `factor` < 1 går nærmere. */
+  zoom(factor: number) {
+    const target = this.controls.target;
+    const offset = this.camera.position.clone().sub(target).multiplyScalar(factor);
+    const dist = THREE.MathUtils.clamp(offset.length(), 8, 3000);
+    this.flyTo(target.clone().add(offset.setLength(dist)), target, null, 220);
+  }
+
+  /** Rammer inn alle synlige former, eller går til utgangsvisningen når det ikke er noen. */
+  fitAll() {
+    const box = new THREE.Box3();
+    for (const m of this.shapes.values()) if (m.visible) box.expandByObject(m);
+    if (box.isEmpty()) {
+      this.camera.up.set(0, 1, 0);
+      return this.flyTo(HOME_POSITION, HOME_TARGET);
+    }
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const fov = THREE.MathUtils.degToRad(this.camera.fov / 2);
+    const fit = Math.min(fov, Math.atan(Math.tan(fov) * this.camera.aspect));
+    const dist = (sphere.radius * 1.35) / Math.sin(fit);
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.flyTo(sphere.center.clone().addScaledVector(dir, dist), sphere.center);
+  }
+
+  /** Ser rett langs en akse (fra visningskuben). Avstanden til målet beholdes. */
+  viewFrom(direction: THREE.Vector3) {
+    const dir = direction.clone().normalize();
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    // Rett ovenfra eller nedenfra trenger en annen opp-retning enn y.
+    const up = Math.abs(dir.y) > 0.99 ? new THREE.Vector3(0, 0, dir.y > 0 ? -1 : 1) : new THREE.Vector3(0, 1, 0);
+    this.camera.up.copy(up);
+    this.flyTo(this.controls.target.clone().addScaledVector(dir, dist), this.controls.target, up);
+  }
+
+  /** Trådnett over hele modellen. */
+  setWireframe(on: boolean) {
+    for (const m of [this.material, this.lockedMaterial, this.cutterMaterial]) {
+      m.wireframe = on;
+      m.needsUpdate = true;
+    }
+  }
+
+  /** Farger som følger lyst og mørkt tema. */
+  setTheme(dark: boolean) {
+    this.grid.material.uniforms.uColor.value.set(dark ? 0x8b93a8 : 0x8a94a8);
+    (this.shadowFloor.material as THREE.ShadowMaterial).opacity = dark ? 0.3 : 0.1;
+    this.material.color.set(dark ? 0xd9dae3 : 0xe6e7ee);
   }
 
   private setRay(clientX: number, clientY: number) {
